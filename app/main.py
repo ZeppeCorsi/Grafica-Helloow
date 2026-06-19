@@ -7,36 +7,77 @@ Depois abra http://localhost:8000 no navegador.
 import secrets
 
 import httpx
-import base64
 from pathlib import Path
 
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from starlette.middleware.sessions import SessionMiddleware
 
 from . import bling, config, mercadolivre
 
-app = FastAPI(title="Bling Hub - teste de atendimento")
+app = FastAPI(title="Hub de atendimento")
+
+# rotas acessiveis sem login
+_LIVRES = {"/entrar", "/sair", "/logo.png"}
 
 
 @app.middleware("http")
-async def _login_basico(request: Request, call_next):
-    """Protege todo o app com usuario/senha. Desligado se APP_PASSWORD vazio."""
-    if config.APP_PASSWORD:
-        header = request.headers.get("authorization", "")
-        ok = False
-        if header.startswith("Basic "):
-            try:
-                usuario, _, senha = base64.b64decode(header[6:]).decode().partition(":")
-                ok = (secrets.compare_digest(usuario, config.APP_USER)
-                      and secrets.compare_digest(senha, config.APP_PASSWORD))
-            except Exception:
-                ok = False
-        if not ok:
-            return Response(
-                status_code=401,
-                headers={"WWW-Authenticate": 'Basic realm="Hub de atendimento"'},
-            )
+async def _exige_login(request: Request, call_next):
+    """Exige sessao logada. Desligado se APP_PASSWORD estiver vazio (uso local)."""
+    if config.APP_PASSWORD and request.url.path not in _LIVRES:
+        if not request.session.get("auth"):
+            return RedirectResponse("/entrar")
     return await call_next(request)
+
+
+# Adicionado DEPOIS do middleware acima -> fica mais externo -> request.session
+# ja estara disponivel quando _exige_login rodar.
+app.add_middleware(SessionMiddleware, secret_key=config.SESSION_SECRET, max_age=60 * 60 * 12)
+
+
+def _pagina_login(erro: str = "") -> HTMLResponse:
+    msg = f"<p style='color:#A32D2D;font-size:13px;margin:0 0 10px'>{erro}</p>" if erro else ""
+    corpo = (
+        "<div class='card' style='max-width:330px;margin:70px auto'>"
+        "<div style='text-align:center;margin-bottom:18px'>"
+        "<img src='/logo.png' style='width:60px;height:60px;border-radius:50%'/>"
+        "<h3 style='margin:10px 0 0'>Hub de atendimento</h3></div>"
+        f"{msg}"
+        "<form method='post' action='/entrar'>"
+        "<label style='font-size:13px;color:#5b6573'>Usuario</label>"
+        "<input name='usuario' autofocus required "
+        "style='width:100%;padding:10px;margin:4px 0 12px;border:1px solid #d7dade;border-radius:8px'/>"
+        "<label style='font-size:13px;color:#5b6573'>Senha</label>"
+        "<input name='senha' type='password' required "
+        "style='width:100%;padding:10px;margin:4px 0 16px;border:1px solid #d7dade;border-radius:8px'/>"
+        "<button class='btn' style='width:100%'>Entrar</button>"
+        "</form></div>"
+    )
+    html = ("<!doctype html><html lang='pt-br'><meta charset='utf-8'>"
+            "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+            f"<title>Entrar</title><style>{_CSS}</style>{corpo}</html>")
+    return HTMLResponse(html)
+
+
+@app.get("/entrar", response_class=HTMLResponse)
+def entrar_form():
+    return _pagina_login()
+
+
+@app.post("/entrar")
+def entrar(request: Request, usuario: str = Form(...), senha: str = Form(...)):
+    ok = (secrets.compare_digest(usuario, config.APP_USER)
+          and secrets.compare_digest(senha, config.APP_PASSWORD or ""))
+    if ok:
+        request.session["auth"] = True
+        return RedirectResponse("/", status_code=303)
+    return _pagina_login("Usuario ou senha incorretos.")
+
+
+@app.get("/sair")
+def sair(request: Request):
+    request.session.clear()
+    return RedirectResponse("/entrar", status_code=303)
 
 # guarda o "state" do OAuth para validar o retorno (em memoria, suficiente p/ teste)
 _pending_state: dict[str, bool] = {}
@@ -113,6 +154,7 @@ def _pagina(corpo: str, full: bool = False, ativo: str = "") -> HTMLResponse:
         "<div class='links'>"
         + lk("/inbox", "Caixa de entrada", "inbox")
         + lk("/pedidos", "Pedidos (Bling)", "pedidos")
+        + ("<a href='/sair'>Sair</a>" if config.APP_PASSWORD else "")
         + "</div></div>"
     )
     miolo = corpo if full else f"<div class='wrap'>{corpo}</div>"

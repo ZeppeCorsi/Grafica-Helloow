@@ -1,5 +1,6 @@
 """Carrega as configuracoes do app a partir do arquivo .env."""
 import os
+import secrets
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -49,3 +50,7 @@ def is_ml_configured() -> bool:
 # --------------------------------------------------------------------------- #
 APP_USER = os.getenv("APP_USER", "admin")
 APP_PASSWORD = os.getenv("APP_PASSWORD", "")
+
+# Chave para assinar o cookie de sessao. Em producao defina SESSION_SECRET
+# (se nao definir, e gerada uma a cada reinicio -> exige novo login).
+SESSION_SECRET = os.getenv("SESSION_SECRET") or secrets.token_hex(32)
