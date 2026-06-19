@@ -179,7 +179,8 @@ def home():
             "<p style='color:#A32D2D'>Faltam credenciais do Bling no <code>.env</code>.</p>"
         )
     bling_ok = bling.carregar_token() is not None
-    ml_ok = mercadolivre.carregar_token() is not None
+    ml_contas = mercadolivre.contas() if config.is_ml_configured() else []
+    ml_ok = bool(ml_contas)
 
     if bling_ok and ml_ok:
         destaque = (
@@ -195,10 +196,13 @@ def home():
         b = "<p>&#10003; Bling conectado.</p>"
     else:
         b = "<p><a class='btn' href='/login'>Conectar ao Bling</a></p>"
+
     if not config.is_ml_configured():
         m = "<p class='muted'>Mercado Livre: faltam credenciais no .env.</p>"
-    elif ml_ok:
-        m = "<p>&#10003; Mercado Livre conectado.</p>"
+    elif ml_contas:
+        nomes = ", ".join(c.get("nickname") or str(c.get("user_id")) for c in ml_contas)
+        m = (f"<p>&#10003; Mercado Livre: <b>{len(ml_contas)}</b> conta(s) &mdash; {nomes}</p>"
+             "<p><a class='btn ghost' href='/ml/login'>+ Conectar outra conta</a></p>")
     else:
         m = "<p><a class='btn ml' href='/ml/login'>Conectar ao Mercado Livre</a></p>"
 
@@ -376,7 +380,7 @@ def ml_callback(request: Request):
         mercadolivre.trocar_codigo_por_token(code)
     except httpx.HTTPStatusError as e:
         return _pagina(f"<h1>Falha ao obter token (ML)</h1><pre>{e.response.text}</pre>")
-    return RedirectResponse("/ml/mensagens")
+    return RedirectResponse("/inbox")
 
 
 @app.get("/ml/mensagens", response_class=HTMLResponse)
@@ -546,37 +550,40 @@ _SPLIT_JS = """
 
 
 @app.get("/inbox", response_class=HTMLResponse)
-def inbox(pack: str = "", buyer: str = ""):
-    if not mercadolivre.carregar_token():
+def inbox(pack: str = "", buyer: str = "", conta: str = ""):
+    contas = mercadolivre.contas()
+    if not contas:
         return RedirectResponse("/ml/login")
-    try:
-        pedidos_ml = mercadolivre.listar_pedidos(limite=20)
-    except RuntimeError:
-        return RedirectResponse("/ml/login")
-    except httpx.HTTPStatusError as e:
-        return _pagina(f"<h1>Erro na API (ML)</h1><pre>{e.response.text}</pre>")
 
-    # ---- lista de conversas ----
+    # ---- lista de conversas (somando todas as contas) ----
     itens = ""
     selecionado = None
-    for o in pedidos_ml:
-        comprador = (o.get("buyer") or {}).get("nickname", "-")
-        comprador_id = str((o.get("buyer") or {}).get("id", ""))
-        pk = str(o.get("pack_id") or o.get("id"))
-        produtos = o.get("order_items") or []
-        titulo = (produtos[0].get("item") or {}).get("title", "-") if produtos else "-"
-        on = pk == pack
-        if on:
-            selecionado = o
-        ini = comprador[:2].upper()
-        itens += (
-            f"<a class='ci {'on' if on else ''}' href='/inbox?pack={pk}&buyer={comprador_id}'>"
-            "<div class='top'>"
-            f"<span class='nm'>{comprador}</span>"
-            "<span class='badge' style='background:#FFF7CC;color:#7a6a00'>Mercado Livre</span>"
-            "</div>"
-            f"<div class='pv'>{titulo}</div></a>"
-        )
+    sel_conta = None
+    for acc in contas:
+        uid = str(acc["user_id"])
+        apelido = acc.get("nickname") or uid
+        try:
+            pedidos = mercadolivre.listar_pedidos(limite=15, user_id=uid)
+        except (RuntimeError, httpx.HTTPStatusError):
+            pedidos = []
+        for o in pedidos:
+            comprador = (o.get("buyer") or {}).get("nickname", "-")
+            comprador_id = str((o.get("buyer") or {}).get("id", ""))
+            pk = str(o.get("pack_id") or o.get("id"))
+            produtos = o.get("order_items") or []
+            titulo = (produtos[0].get("item") or {}).get("title", "-") if produtos else "-"
+            on = pk == pack and uid == conta
+            if on:
+                selecionado, sel_conta = o, acc
+            itens += (
+                f"<a class='ci {'on' if on else ''}' "
+                f"href='/inbox?pack={pk}&buyer={comprador_id}&conta={uid}'>"
+                "<div class='top'>"
+                f"<span class='nm'>{comprador}</span>"
+                f"<span class='badge' style='background:#FFF7CC;color:#7a6a00'>{apelido}</span>"
+                "</div>"
+                f"<div class='pv'>{titulo}</div></a>"
+            )
     if not itens:
         itens = "<div style='padding:16px' class='muted'>Nenhum pedido recente.</div>"
 
@@ -590,11 +597,12 @@ def inbox(pack: str = "", buyer: str = ""):
         total = selecionado.get("total_amount", "-")
         produtos = selecionado.get("order_items") or []
         titulo = (produtos[0].get("item") or {}).get("title", "-") if produtos else "-"
+        apelido = sel_conta.get("nickname") or conta
         try:
-            mensagens = mercadolivre.listar_mensagens(pack)
+            mensagens = mercadolivre.listar_mensagens(pack, user_id=conta)
         except httpx.HTTPStatusError:
             mensagens = []
-        sid = str(mercadolivre.seller_id())
+        sid = str(mercadolivre.seller_id(conta))
         baloes = ""
         for m in mensagens:
             eu = str((m.get("from") or {}).get("user_id", "")) == sid
@@ -606,7 +614,7 @@ def inbox(pack: str = "", buyer: str = ""):
             "<div class='dhead'>"
             f"<div class='av' style='background:#FFF7CC;color:#7a6a00'>{comprador[:2].upper()}</div>"
             f"<div style='flex:1'><div style='font-weight:600'>{comprador}</div>"
-            "<div class='muted' style='font-size:12px'>Mercado Livre</div></div>"
+            f"<div class='muted' style='font-size:12px'>Mercado Livre &middot; {apelido}</div></div>"
             f"{_badge_status(status)}</div>"
             f"<div class='ordbar'><span><i class='ti ti-package'></i> {titulo}</span>"
             f"<span><i class='ti ti-cash'></i> R$ {total}</span>"
@@ -615,6 +623,7 @@ def inbox(pack: str = "", buyer: str = ""):
             f"<form class='reply' method='post' action='/inbox/responder'>"
             f"<input type='hidden' name='pack' value='{pack}'/>"
             f"<input type='hidden' name='buyer' value='{buyer}'/>"
+            f"<input type='hidden' name='conta' value='{conta}'/>"
             "<input name='texto' placeholder='Responder o comprador...' required/>"
             "<button class='btn ml' type='submit'>Enviar</button></form>"
         )
@@ -634,9 +643,10 @@ def inbox(pack: str = "", buyer: str = ""):
 
 
 @app.post("/inbox/responder")
-def inbox_responder(pack: str = Form(...), buyer: str = Form(""), texto: str = Form(...)):
+def inbox_responder(pack: str = Form(...), buyer: str = Form(""),
+                    conta: str = Form(""), texto: str = Form(...)):
     try:
-        mercadolivre.enviar_mensagem(pack, buyer, texto)
+        mercadolivre.enviar_mensagem(pack, buyer, texto, user_id=conta or None)
     except (RuntimeError, httpx.HTTPStatusError):
         pass
-    return RedirectResponse(f"/inbox?pack={pack}&buyer={buyer}", status_code=303)
+    return RedirectResponse(f"/inbox?pack={pack}&buyer={buyer}&conta={conta}", status_code=303)

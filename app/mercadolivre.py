@@ -1,18 +1,10 @@
 """Cliente da API do Mercado Livre: OAuth 2.0 + mensagens pos-venda.
 
-Diferencas em relacao ao Bling:
-  - O redirect_uri PRECISA ser HTTPS (use ngrok no teste local).
-  - client_id/secret vao no corpo do POST (nao em Basic Auth).
-  - A resposta do token ja traz o "user_id" (= seller_id), que guardamos.
-
-Fluxo:
-  1. montar_url_autorizacao()  -> usuario aprova no Mercado Livre
-  2. trocar_codigo_por_token() -> troca o code por access_token + refresh_token
-  3. get()/post()             -> chamadas autenticadas, com refresh automatico
+Suporta VARIAS contas do Mercado Livre no mesmo app. Cada conta e guardada
+com a chave "ml:{user_id}". As funcoes aceitam um user_id opcional; sem ele,
+usam a primeira conta conectada.
 """
-import json
 import time
-from typing import Any
 from urllib.parse import urlencode
 
 import httpx
@@ -21,24 +13,43 @@ from . import config, store
 
 
 # --------------------------------------------------------------------------- #
-# Token (arquivo local OU banco, ver app/store.py)
+# Contas conectadas
 # --------------------------------------------------------------------------- #
-def _salvar_token(data: dict[str, Any]) -> None:
+def _migrar_legado() -> None:
+    """Move um token antigo (chave 'ml', conta unica) para o novo formato."""
+    antigo = store.carregar("ml")
+    if antigo and antigo.get("user_id"):
+        store.salvar(f"ml:{antigo['user_id']}", antigo)
+        store.remover("ml")
+
+
+def contas() -> list[dict]:
+    """Lista as contas do Mercado Livre conectadas."""
+    _migrar_legado()
+    return store.listar("ml:")
+
+
+def _primeiro_uid() -> str | None:
+    cs = contas()
+    return str(cs[0]["user_id"]) if cs else None
+
+
+def seller_id(user_id: str | None = None) -> str | None:
+    return str(user_id) if user_id else _primeiro_uid()
+
+
+def carregar_token(user_id: str | None = None) -> dict | None:
+    uid = seller_id(user_id)
+    return store.carregar(f"ml:{uid}") if uid else None
+
+
+def _salvar_token(data: dict) -> None:
     data["expires_at"] = time.time() + int(data.get("expires_in", 0)) - 60
-    store.salvar("ml", data)
-
-
-def carregar_token() -> dict[str, Any] | None:
-    return store.carregar("ml")
-
-
-def seller_id() -> str | None:
-    token = carregar_token()
-    return str(token["user_id"]) if token and token.get("user_id") else None
+    store.salvar(f"ml:{data['user_id']}", data)
 
 
 # --------------------------------------------------------------------------- #
-# Passo 1: URL de autorizacao
+# OAuth
 # --------------------------------------------------------------------------- #
 def montar_url_autorizacao(state: str) -> str:
     params = {
@@ -50,10 +61,19 @@ def montar_url_autorizacao(state: str) -> str:
     return f"{config.ML_AUTHORIZE_URL}?{urlencode(params)}"
 
 
-# --------------------------------------------------------------------------- #
-# Passo 2: trocar code por token / refresh
-# --------------------------------------------------------------------------- #
-def trocar_codigo_por_token(code: str) -> dict[str, Any]:
+def _buscar_nickname(access_token: str) -> str | None:
+    try:
+        r = httpx.get(
+            f"{config.ML_API_BASE}/users/me",
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=15,
+        )
+        return r.json().get("nickname") if r.status_code == 200 else None
+    except Exception:
+        return None
+
+
+def trocar_codigo_por_token(code: str) -> dict:
     resp = httpx.post(
         config.ML_TOKEN_URL,
         headers={"Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded"},
@@ -68,11 +88,12 @@ def trocar_codigo_por_token(code: str) -> dict[str, Any]:
     )
     resp.raise_for_status()
     token = resp.json()
+    token["nickname"] = _buscar_nickname(token["access_token"])
     _salvar_token(token)
     return token
 
 
-def _renovar_token(refresh_token: str) -> dict[str, Any]:
+def _renovar_token(user_id: str, refresh_token: str) -> dict:
     resp = httpx.post(
         config.ML_TOKEN_URL,
         headers={"Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded"},
@@ -86,21 +107,24 @@ def _renovar_token(refresh_token: str) -> dict[str, Any]:
     )
     resp.raise_for_status()
     token = resp.json()
+    antigo = store.carregar(f"ml:{user_id}") or {}
+    token.setdefault("nickname", antigo.get("nickname"))
     _salvar_token(token)
     return token
 
 
-def _access_token_valido() -> str:
-    token = carregar_token()
+def _access_token_valido(user_id: str | None = None) -> str:
+    uid = seller_id(user_id)
+    token = store.carregar(f"ml:{uid}") if uid else None
     if not token:
-        raise RuntimeError("Sem token do Mercado Livre. Faca login em /ml/login.")
+        raise RuntimeError("Sem conta do Mercado Livre. Faca login em /ml/login.")
     if time.time() >= token.get("expires_at", 0):
-        token = _renovar_token(token["refresh_token"])
+        token = _renovar_token(uid, token["refresh_token"])
     return token["access_token"]
 
 
 # --------------------------------------------------------------------------- #
-# Passo 3: chamadas autenticadas (com retry no 401)
+# Chamadas autenticadas (com retry no 401)
 # --------------------------------------------------------------------------- #
 def _req(metodo: str, path: str, token: str, **kwargs) -> httpx.Response:
     return httpx.request(
@@ -112,14 +136,15 @@ def _req(metodo: str, path: str, token: str, **kwargs) -> httpx.Response:
     )
 
 
-def _chamar(metodo: str, path: str, **kwargs) -> dict[str, Any]:
-    resp = _req(metodo, path, _access_token_valido(), **kwargs)
+def _chamar(metodo: str, path: str, user_id: str | None = None, **kwargs) -> dict:
+    uid = seller_id(user_id)
+    resp = _req(metodo, path, _access_token_valido(uid), **kwargs)
     if resp.status_code == 401:
-        token = carregar_token()
+        token = store.carregar(f"ml:{uid}") if uid else None
         if not token or not token.get("refresh_token"):
             raise RuntimeError("Sessao do Mercado Livre expirada. Faca login em /ml/login.")
         try:
-            novo = _renovar_token(token["refresh_token"])
+            novo = _renovar_token(uid, token["refresh_token"])
         except httpx.HTTPStatusError:
             raise RuntimeError("Sessao do Mercado Livre expirada. Faca login em /ml/login.")
         resp = _req(metodo, path, novo["access_token"], **kwargs)
@@ -127,37 +152,30 @@ def _chamar(metodo: str, path: str, **kwargs) -> dict[str, Any]:
     return resp.json() if resp.content else {}
 
 
-def get(path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-    return _chamar("GET", path, params=params or {})
+def get(path: str, params: dict | None = None, user_id: str | None = None) -> dict:
+    return _chamar("GET", path, user_id=user_id, params=params or {})
 
 
-def post(path: str, body: dict[str, Any]) -> dict[str, Any]:
-    return _chamar("POST", path, json=body)
+def post(path: str, body: dict, user_id: str | None = None) -> dict:
+    return _chamar("POST", path, user_id=user_id, json=body)
 
 
 # --------------------------------------------------------------------------- #
-# Pedidos e mensagens
+# Pedidos e mensagens (por conta)
 # --------------------------------------------------------------------------- #
-def listar_pedidos(limite: int = 15) -> list[dict[str, Any]]:
-    """Pedidos recentes do vendedor (cada um traz comprador e pack_id)."""
-    sid = seller_id()
-    dados = get("/orders/search", {"seller": sid, "sort": "date_desc", "limit": limite})
+def listar_pedidos(limite: int = 15, user_id: str | None = None) -> list[dict]:
+    uid = seller_id(user_id)
+    dados = get("/orders/search", {"seller": uid, "sort": "date_desc", "limit": limite}, user_id=uid)
     return dados.get("results", [])
 
 
-def listar_mensagens(pack_id: str) -> list[dict[str, Any]]:
-    """Mensagens de uma conversa (pack). Para pedido sem pack, pack_id = order_id."""
-    sid = seller_id()
-    dados = get(f"/messages/packs/{pack_id}/sellers/{sid}", {"tag": "post_sale"})
+def listar_mensagens(pack_id: str, user_id: str | None = None) -> list[dict]:
+    uid = seller_id(user_id)
+    dados = get(f"/messages/packs/{pack_id}/sellers/{uid}", {"tag": "post_sale"}, user_id=uid)
     return dados.get("messages", [])
 
 
-def enviar_mensagem(pack_id: str, comprador_id: str, texto: str) -> dict[str, Any]:
-    """Responde o comprador dentro da conversa do Mercado Livre."""
-    sid = seller_id()
-    body = {
-        "from": {"user_id": str(sid)},
-        "to": {"user_id": str(comprador_id)},
-        "text": texto,
-    }
-    return post(f"/messages/packs/{pack_id}/sellers/{sid}?tag=post_sale", body)
+def enviar_mensagem(pack_id: str, comprador_id: str, texto: str, user_id: str | None = None) -> dict:
+    uid = seller_id(user_id)
+    body = {"from": {"user_id": str(uid)}, "to": {"user_id": str(comprador_id)}, "text": texto}
+    return post(f"/messages/packs/{pack_id}/sellers/{uid}?tag=post_sale", body, user_id=uid)

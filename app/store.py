@@ -1,10 +1,10 @@
 """Armazenamento dos tokens.
 
 Regra:
-  - Se existir a variavel DATABASE_URL (ambiente de nuvem) -> guarda no Postgres.
-  - Senao (maquina local) -> guarda em arquivos JSON, como antes.
+  - Se existir DATABASE_URL (nuvem) -> guarda no Postgres.
+  - Senao (local) -> guarda em arquivos JSON.
 
-Assim o mesmo codigo roda local (arquivos) e no Render (banco persistente).
+Chaves: "bling", "ml" (legado) e "ml:{user_id}" (uma por conta do Mercado Livre).
 """
 import json
 import os
@@ -13,18 +13,19 @@ from . import config
 
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 
-# mapeia a "chave" logica para o arquivo local correspondente (modo fallback)
-_ARQUIVOS = {
-    "bling": config.TOKEN_FILE,
-    "ml": config.TOKEN_FILE_ML,
-}
+
+def _arquivo(chave: str):
+    if chave == "bling":
+        return config.TOKEN_FILE
+    if chave == "ml":
+        return config.TOKEN_FILE_ML
+    return config.BASE_DIR / ("token_" + chave.replace(":", "_") + ".json")
 
 
 if DATABASE_URL:
     import psycopg2
 
     def _conn():
-        # A connection string do Neon ja inclui ?sslmode=require.
         return psycopg2.connect(DATABASE_URL)
 
     def _init() -> None:
@@ -52,13 +53,33 @@ if DATABASE_URL:
             row = cur.fetchone()
             return row[0] if row else None
 
+    def listar(prefixo: str) -> list[dict]:
+        with _conn() as c, c.cursor() as cur:
+            cur.execute("SELECT dados FROM tokens WHERE chave LIKE %s ORDER BY chave", (prefixo + "%",))
+            return [r[0] for r in cur.fetchall()]
+
+    def remover(chave: str) -> None:
+        with _conn() as c, c.cursor() as cur:
+            cur.execute("DELETE FROM tokens WHERE chave = %s", (chave,))
+            c.commit()
+
 else:
 
     def salvar(chave: str, data: dict) -> None:
-        _ARQUIVOS[chave].write_text(json.dumps(data, indent=2), encoding="utf-8")
+        _arquivo(chave).write_text(json.dumps(data, indent=2), encoding="utf-8")
 
     def carregar(chave: str) -> dict | None:
-        arq = _ARQUIVOS[chave]
-        if not arq.exists():
-            return None
-        return json.loads(arq.read_text(encoding="utf-8"))
+        arq = _arquivo(chave)
+        return json.loads(arq.read_text(encoding="utf-8")) if arq.exists() else None
+
+    def listar(prefixo: str) -> list[dict]:
+        res = []
+        if prefixo == "ml:":
+            for p in sorted(config.BASE_DIR.glob("token_ml_*.json")):
+                res.append(json.loads(p.read_text(encoding="utf-8")))
+        return res
+
+    def remover(chave: str) -> None:
+        arq = _arquivo(chave)
+        if arq.exists():
+            arq.unlink()
