@@ -1,0 +1,24 @@
+# Infraestrutura como codigo para o Render.
+# Ao conectar o repositorio, o Render le este arquivo e cria o servico.
+services:
+  - type: web
+    name: hub-atendimento
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: BLING_CLIENT_ID
+        sync: false
+      - key: BLING_CLIENT_SECRET
+        sync: false
+      - key: BLING_REDIRECT_URI
+        sync: false
+      - key: ML_CLIENT_ID
+        sync: false
+      - key: ML_CLIENT_SECRET
+        sync: false
+      - key: ML_REDIRECT_URI
+        sync: false
+      - key: DATABASE_URL
+        sync: false

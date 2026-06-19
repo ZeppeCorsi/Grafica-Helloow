@@ -1,0 +1,15 @@
+# segredos e tokens (NUNCA versionar)
+.env
+token.json
+token_ml.json
+token_*.json
+
+# ambiente python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# binarios / ferramentas locais
+cloudflared.exe
+*.exe
