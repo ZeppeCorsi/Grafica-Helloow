@@ -24,7 +24,8 @@ if DATABASE_URL:
     import psycopg2
 
     def _conn():
-        return psycopg2.connect(DATABASE_URL, sslmode="require")
+        # A connection string do Neon ja inclui ?sslmode=require.
+        return psycopg2.connect(DATABASE_URL)
 
     def _init() -> None:
         with _conn() as c, c.cursor() as cur:
