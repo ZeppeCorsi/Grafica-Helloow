@@ -41,3 +41,11 @@ TOKEN_FILE_ML = BASE_DIR / "token_ml.json"
 
 def is_ml_configured() -> bool:
     return bool(ML_CLIENT_ID and ML_CLIENT_SECRET)
+
+
+# --------------------------------------------------------------------------- #
+# Login simples (HTTP Basic). Se APP_PASSWORD estiver vazio, a protecao fica
+# DESLIGADA (uso local). Em producao defina APP_USER e APP_PASSWORD.
+# --------------------------------------------------------------------------- #
+APP_USER = os.getenv("APP_USER", "admin")
+APP_PASSWORD = os.getenv("APP_PASSWORD", "")

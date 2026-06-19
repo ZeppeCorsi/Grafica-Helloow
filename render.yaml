@@ -22,3 +22,7 @@ services:
         sync: false
       - key: DATABASE_URL
         sync: false
+      - key: APP_USER
+        sync: false
+      - key: APP_PASSWORD
+        sync: false

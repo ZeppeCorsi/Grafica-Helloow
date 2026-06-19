@@ -7,14 +7,36 @@ Depois abra http://localhost:8000 no navegador.
 import secrets
 
 import httpx
+import base64
 from pathlib import Path
 
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 
 from . import bling, config, mercadolivre
 
 app = FastAPI(title="Bling Hub - teste de atendimento")
+
+
+@app.middleware("http")
+async def _login_basico(request: Request, call_next):
+    """Protege todo o app com usuario/senha. Desligado se APP_PASSWORD vazio."""
+    if config.APP_PASSWORD:
+        header = request.headers.get("authorization", "")
+        ok = False
+        if header.startswith("Basic "):
+            try:
+                usuario, _, senha = base64.b64decode(header[6:]).decode().partition(":")
+                ok = (secrets.compare_digest(usuario, config.APP_USER)
+                      and secrets.compare_digest(senha, config.APP_PASSWORD))
+            except Exception:
+                ok = False
+        if not ok:
+            return Response(
+                status_code=401,
+                headers={"WWW-Authenticate": 'Basic realm="Hub de atendimento"'},
+            )
+    return await call_next(request)
 
 # guarda o "state" do OAuth para validar o retorno (em memoria, suficiente p/ teste)
 _pending_state: dict[str, bool] = {}
@@ -467,6 +489,15 @@ _SPLIT_JS = """
     document.body.style.userSelect='';
     if(lastw)localStorage.setItem('midw',lastw);
   });
+  // rola a conversa para a ultima mensagem
+  var th=document.querySelector('.thread');if(th)th.scrollTop=th.scrollHeight;
+  // auto-atualiza a cada 25s, mas NAO enquanto o usuario digita uma resposta
+  setInterval(function(){
+    var inp=document.querySelector('.reply input[name=texto]');
+    if(inp&&(inp.value.trim()!==''||document.activeElement===inp))return;
+    if(drag)return;
+    location.reload();
+  },25000);
 })();
 </script>
 """
