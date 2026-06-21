@@ -13,7 +13,7 @@ from fastapi import FastAPI, Form, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import bling, config, mercadolivre
+from . import bling, categorias, config, mercadolivre
 
 app = FastAPI(title="Hub de atendimento")
 
@@ -525,22 +525,38 @@ def _anexos_html(m: dict, conta: str) -> str:
     return out
 
 
-def _rail(ativo_ml: bool) -> str:
+def _rail(cats: list, cat_atual: str) -> str:
     def item(nome, cor, on=False, off=False):
         cls = "chan" + (" on" if on else "") + (" off" if off else "")
         tag = "" if not off else "<span class='muted' style='font-size:11px'>em breve</span>"
         return (f"<div class='{cls}'><span class='dot' style='background:{cor}'></span>"
                 f"<span style='flex:1'>{nome}</span>{tag}</div>")
-    return (
-        "<div class='rail'>"
+
+    canais = (
         "<div class='muted' style='padding:4px 11px 8px;font-size:11px'>CANAIS</div>"
         + item("Todos", "#8a93a0", on=True)
-        + item("Mercado Livre", "#FFE600", on=ativo_ml)
+        + item("Mercado Livre", "#FFE600", on=True)
         + item("Shopee", "#EE4D2D", off=True)
         + item("Amazon", "#FF9900", off=True)
         + item("WhatsApp", "#25D366", off=True)
-        + "</div>"
     )
+
+    def catlink(label, valor, ativo, icone="ti-tag"):
+        cls = "chan" + (" on" if ativo else "")
+        return (f"<a class='{cls}' href='/inbox?cat={valor}'>"
+                f"<i class='ti {icone}' style='font-size:15px'></i>"
+                f"<span style='flex:1'>{label}</span></a>")
+
+    cats_html = "<div class='muted' style='padding:14px 11px 6px;font-size:11px'>CATEGORIAS</div>"
+    cats_html += catlink("Todas", "", cat_atual == "", "ti-stack")
+    for c in cats:
+        cats_html += catlink(c["nome"], str(c["id"]), cat_atual == str(c["id"]))
+    cats_html += catlink("Sem categoria", "none", cat_atual == "none", "ti-tag-off")
+    cats_html += ("<a class='chan' href='/categorias' style='color:#534AB7'>"
+                  "<i class='ti ti-settings' style='font-size:15px'></i>"
+                  "<span style='flex:1'>Gerenciar</span></a>")
+
+    return "<div class='rail'>" + canais + cats_html + "</div>"
 
 
 _SPLIT_JS = """
@@ -580,10 +596,14 @@ _SPLIT_JS = """
 
 
 @app.get("/inbox", response_class=HTMLResponse)
-def inbox(pack: str = "", buyer: str = "", conta: str = ""):
+def inbox(pack: str = "", buyer: str = "", conta: str = "", cat: str = ""):
     contas = mercadolivre.contas()
     if not contas:
         return RedirectResponse("/ml/login")
+
+    cats = categorias.listar_categorias()
+    nomes_cat = {c["id"]: c["nome"] for c in cats}
+    marcas = categorias.marcas()  # pack -> categoria_id
 
     # ---- lista de conversas (somando todas as contas) ----
     itens = ""
@@ -602,20 +622,30 @@ def inbox(pack: str = "", buyer: str = "", conta: str = ""):
             pk = str(o.get("pack_id") or o.get("id"))
             produtos = o.get("order_items") or []
             titulo = (produtos[0].get("item") or {}).get("title", "-") if produtos else "-"
+            cat_id = marcas.get(pk)
+            cat_nome = nomes_cat.get(cat_id) if cat_id else None
             on = pk == pack and uid == conta
             if on:
                 selecionado, sel_conta = o, acc
+            # filtro por categoria
+            if cat == "none" and cat_id:
+                continue
+            if cat and cat != "none" and str(cat_id) != cat:
+                continue
+            etiqueta = (f"<div style='margin-top:5px'><span class='badge' "
+                        f"style='background:#EEEDFE;color:#3C3489'>{cat_nome}</span></div>"
+                        if cat_nome else "")
             itens += (
                 f"<a class='ci {'on' if on else ''}' "
-                f"href='/inbox?pack={pk}&buyer={comprador_id}&conta={uid}'>"
+                f"href='/inbox?pack={pk}&buyer={comprador_id}&conta={uid}&cat={cat}'>"
                 "<div class='top'>"
                 f"<span class='nm'>{comprador}</span>"
                 f"<span class='badge' style='background:#FFF7CC;color:#7a6a00'>{apelido}</span>"
                 "</div>"
-                f"<div class='pv'>{titulo}</div></a>"
+                f"<div class='pv'>{titulo}</div>{etiqueta}</a>"
             )
     if not itens:
-        itens = "<div style='padding:16px' class='muted'>Nenhum pedido recente.</div>"
+        itens = "<div style='padding:16px' class='muted'>Nenhuma conversa nesta categoria.</div>"
 
     # ---- painel de detalhe ----
     if selecionado is None:
@@ -641,6 +671,25 @@ def inbox(pack: str = "", buyer: str = "", conta: str = ""):
                        f"{txt}{_anexos_html(m, conta)}</div>")
         if not baloes:
             baloes = "<p class='muted'>Sem mensagens nesta conversa ainda.</p>"
+
+        # seletor de categoria desta conversa
+        cat_desta = marcas.get(pack)
+        opcoes = "<option value=''>Sem categoria</option>"
+        for c in cats:
+            sel = " selected" if c["id"] == cat_desta else ""
+            opcoes += f"<option value='{c['id']}'{sel}>{c['nome']}</option>"
+        seletor = (
+            "<form method='post' action='/categoria/marcar' style='display:inline-flex;align-items:center;gap:5px'>"
+            f"<input type='hidden' name='pack' value='{pack}'/>"
+            f"<input type='hidden' name='conta' value='{conta}'/>"
+            f"<input type='hidden' name='buyer' value='{buyer}'/>"
+            f"<input type='hidden' name='cat' value='{cat}'/>"
+            "<i class='ti ti-tag'></i>"
+            "<select name='categoria' onchange='this.form.submit()' "
+            "style='font-size:12px;padding:3px 6px;border-radius:6px;border:1px solid #d7dade'>"
+            f"{opcoes}</select></form>"
+        )
+
         detalhe = (
             "<div class='dhead'>"
             f"<div class='av' style='background:#FFF7CC;color:#7a6a00'>{comprador[:2].upper()}</div>"
@@ -649,7 +698,7 @@ def inbox(pack: str = "", buyer: str = "", conta: str = ""):
             f"{_badge_status(status)}</div>"
             f"<div class='ordbar'><span><i class='ti ti-package'></i> {titulo}</span>"
             f"<span><i class='ti ti-cash'></i> R$ {total}</span>"
-            f"<span>Pedido {selecionado.get('id','-')}</span></div>"
+            f"{seletor}</div>"
             f"<div class='thread'>{baloes}</div>"
             f"<form class='reply' method='post' action='/inbox/responder'>"
             f"<input type='hidden' name='pack' value='{pack}'/>"
@@ -663,7 +712,7 @@ def inbox(pack: str = "", buyer: str = "", conta: str = ""):
         "<link rel='stylesheet' href='https://cdn.jsdelivr.net/npm/"
         "@tabler/icons-webfont@3.11.0/dist/tabler-icons.min.css'>"
         "<div class='inbox'>"
-        + _rail(True)
+        + _rail(cats, cat)
         + f"<div class='clist'>{itens}</div>"
         + "<div class='splitter' id='split'></div>"
         + f"<div class='detail'>{detalhe}</div>"
@@ -691,3 +740,67 @@ def ml_anexo(conta: str, filename: str):
     except Exception:
         return Response(status_code=404)
     return Response(content=conteudo, media_type=ctype)
+
+
+# =========================================================================== #
+# Categorias (etiquetas das conversas)
+# =========================================================================== #
+@app.post("/categoria/marcar")
+def categoria_marcar(pack: str = Form(...), conta: str = Form(""), buyer: str = Form(""),
+                     cat: str = Form(""), categoria: str = Form("")):
+    categorias.marcar(pack, int(categoria) if categoria else None)
+    return RedirectResponse(
+        f"/inbox?pack={pack}&buyer={buyer}&conta={conta}&cat={cat}", status_code=303)
+
+
+@app.get("/categorias", response_class=HTMLResponse)
+def categorias_page():
+    linhas = ""
+    for c in categorias.listar_categorias():
+        nome = c["nome"].replace('"', "&quot;")
+        linhas += (
+            "<div style='display:flex;gap:8px;align-items:center;margin:8px 0'>"
+            "<form method='post' action='/categorias/renomear' style='display:flex;gap:6px;flex:1'>"
+            f"<input type='hidden' name='id' value='{c['id']}'/>"
+            f"<input name='nome' value=\"{nome}\" "
+            "style='flex:1;padding:9px;border:1px solid #d7dade;border-radius:8px'/>"
+            "<button class='btn ghost'>Salvar</button></form>"
+            "<form method='post' action='/categorias/excluir' "
+            "onsubmit=\"return confirm('Excluir esta categoria?')\">"
+            f"<input type='hidden' name='id' value='{c['id']}'/>"
+            "<button class='btn' style='background:#FCEBEB;color:#A32D2D'>Excluir</button></form>"
+            "</div>"
+        )
+    if not linhas:
+        linhas = "<p class='muted'>Nenhuma categoria ainda. Crie a primeira acima.</p>"
+    corpo = (
+        "<h1>Categorias</h1>"
+        "<div class='card'>"
+        "<form method='post' action='/categorias/criar' style='display:flex;gap:8px'>"
+        "<input name='nome' placeholder='Nova categoria (ex: Adesivos)' required "
+        "style='flex:1;padding:10px;border:1px solid #d7dade;border-radius:8px'/>"
+        "<button class='btn'>Adicionar</button></form>"
+        f"<div style='margin-top:16px'>{linhas}</div></div>"
+        "<p><a href='/inbox'>&larr; voltar para a caixa de entrada</a></p>"
+    )
+    return _pagina(corpo, ativo="inbox")
+
+
+@app.post("/categorias/criar")
+def categorias_criar(nome: str = Form(...)):
+    if nome.strip():
+        categorias.criar_categoria(nome.strip())
+    return RedirectResponse("/categorias", status_code=303)
+
+
+@app.post("/categorias/renomear")
+def categorias_renomear(id: int = Form(...), nome: str = Form(...)):
+    if nome.strip():
+        categorias.renomear_categoria(id, nome.strip())
+    return RedirectResponse("/categorias", status_code=303)
+
+
+@app.post("/categorias/excluir")
+def categorias_excluir(id: int = Form(...)):
+    categorias.excluir_categoria(id)
+    return RedirectResponse("/categorias", status_code=303)
