@@ -650,9 +650,24 @@ _SPLIT_JS = """
 """
 
 
+def _conv_dict(o: dict, uid: str, marcas: dict, aguardando: set) -> dict:
+    pk = str(o.get("pack_id") or o.get("id"))
+    produtos = o.get("order_items") or []
+    return {
+        "o": o, "pk": pk, "uid": uid,
+        "codigo": str(o.get("id") or pk),
+        "comprador": (o.get("buyer") or {}).get("nickname", "-"),
+        "comprador_id": str((o.get("buyer") or {}).get("id", "")),
+        "titulo": (produtos[0].get("item") or {}).get("title", "-") if produtos else "-",
+        "data": str(o.get("date_created") or ""),
+        "cat_id": marcas.get(pk),
+        "aguarda": pk in aguardando,
+    }
+
+
 @app.get("/inbox", response_class=HTMLResponse)
 def inbox(pack: str = "", buyer: str = "", conta: str = "",
-          cat: str = "", loja: str = "", status: str = ""):
+          cat: str = "", loja: str = "", status: str = "", q: str = ""):
     contas = mercadolivre.contas()
     if not contas:
         return RedirectResponse("/ml/login")
@@ -682,34 +697,45 @@ def inbox(pack: str = "", buyer: str = "", conta: str = "",
         except (RuntimeError, httpx.HTTPStatusError):
             pedidos = []
         for o in pedidos:
-            pk = str(o.get("pack_id") or o.get("id"))
-            if pk == pack and uid == conta:
-                selecionado, sel_conta = o, acc
-            produtos = o.get("order_items") or []
-            convs.append({
-                "pk": pk, "uid": uid,
-                "comprador": (o.get("buyer") or {}).get("nickname", "-"),
-                "comprador_id": str((o.get("buyer") or {}).get("id", "")),
-                "titulo": (produtos[0].get("item") or {}).get("title", "-") if produtos else "-",
-                "data": str(o.get("date_created") or ""),
-                "cat_id": marcas.get(pk),
-                "aguarda": pk in aguardando,
-            })
+            convs.append(_conv_dict(o, uid, marcas, aguardando))
+
+    # busca por codigo antigo (que nao esta na lista recente): consulta direto no ML
+    termo = q.strip()
+    if termo.isdigit() and not any(c["codigo"] == termo or c["pk"] == termo for c in convs):
+        for acc in contas:
+            o = mercadolivre.obter_pedido(termo, token=acc)
+            if o:
+                convs.append(_conv_dict(o, str(acc["user_id"]), marcas, aguardando))
+                break
+
+    # identifica a conversa selecionada
+    for c in convs:
+        if c["pk"] == pack and c["uid"] == conta:
+            selecionado = c["o"]
+            sel_conta = next((a for a in contas if str(a["user_id"]) == conta), None)
+            break
 
     # ordena: conversas aguardando primeiro, depois pelas mais recentes
     convs.sort(key=lambda c: (c["aguarda"], c["data"]), reverse=True)
 
+    termo_l = termo.lower()
+
     # ---- aplica filtros e monta a lista ----
     itens = ""
     for c in convs:
-        if loja and c["uid"] != loja:
-            continue
-        if status == "aguardando" and not c["aguarda"]:
-            continue
-        if cat == "none" and c["cat_id"]:
-            continue
-        if cat and cat != "none" and str(c["cat_id"]) != cat:
-            continue
+        if termo:  # busca tem prioridade sobre os outros filtros
+            alvo = f"{c['codigo']} {c['pk']} {c['comprador']} {c['titulo']}".lower()
+            if termo_l not in alvo:
+                continue
+        else:
+            if loja and c["uid"] != loja:
+                continue
+            if status == "aguardando" and not c["aguarda"]:
+                continue
+            if cat == "none" and c["cat_id"]:
+                continue
+            if cat and cat != "none" and str(c["cat_id"]) != cat:
+                continue
         on = c["pk"] == pack and c["uid"] == conta
         cat_nome = nomes_cat.get(c["cat_id"]) if c["cat_id"] else None
         etiqueta = (f"<div style='margin-top:5px'><span class='badge' "
@@ -721,15 +747,36 @@ def inbox(pack: str = "", buyer: str = "", conta: str = "",
         itens += (
             f"<a class='ci {'on' if on else ''}' "
             f"href='/inbox?pack={c['pk']}&buyer={c['comprador_id']}&conta={c['uid']}"
-            f"&cat={cat}&loja={loja}&status={status}'>"
+            f"&cat={cat}&loja={loja}&status={status}&q={q}'>"
             "<div class='top'>"
             f"<span class='nm' style='display:flex;align-items:center;gap:6px'>{sino}{c['comprador']}</span>"
             f"<span class='badge' style='background:#FFF7CC;color:#7a6a00'>{apelidos.get(c['uid'])}</span>"
             "</div>"
-            f"<div class='pv'>{c['titulo']}</div>{etiqueta}</a>"
+            f"<div class='pv'>{c['titulo']}</div>"
+            f"<div class='muted' style='font-size:11px;margin-top:3px'>"
+            f"<i class='ti ti-hash' style='font-size:12px'></i> {c['codigo']}</div>"
+            f"{etiqueta}</a>"
         )
     if not itens:
-        itens = "<div style='padding:16px' class='muted'>Nenhuma conversa com esses filtros.</div>"
+        vazio = "Nenhum resultado para a busca." if termo else "Nenhuma conversa com esses filtros."
+        itens = f"<div style='padding:16px' class='muted'>{vazio}</div>"
+
+    # barra de busca no topo da lista
+    busca = (
+        "<form method='get' action='/inbox' "
+        "style='padding:9px 10px;border-bottom:1px solid #e6e8eb;display:flex;gap:6px;"
+        "position:sticky;top:0;background:#fafbfc;z-index:2'>"
+        f"<input name='q' value='{q}' placeholder='Buscar por codigo, cliente ou produto' "
+        "style='flex:1;padding:8px 10px;border:1px solid #d7dade;border-radius:8px;font-size:13px'/>"
+        f"<input type='hidden' name='cat' value='{cat}'/>"
+        f"<input type='hidden' name='loja' value='{loja}'/>"
+        f"<input type='hidden' name='status' value='{status}'/>"
+        "<button class='btn ghost' style='padding:0 12px'><i class='ti ti-search'></i></button>"
+        + (f"<a class='btn ghost' href='/inbox' style='padding:8px 10px' "
+           "title='Limpar busca'><i class='ti ti-x'></i></a>" if termo else "")
+        + "</form>"
+    )
+    itens = busca + itens
 
     # ---- painel de detalhe ----
     if selecionado is None:
@@ -770,6 +817,7 @@ def inbox(pack: str = "", buyer: str = "", conta: str = "",
             f"<input type='hidden' name='cat' value='{cat}'/>"
             f"<input type='hidden' name='loja' value='{loja}'/>"
             f"<input type='hidden' name='status' value='{status}'/>"
+            f"<input type='hidden' name='q' value='{q}'/>"
             "<i class='ti ti-tag'></i>"
             "<select name='categoria' onchange='this.form.submit()' "
             "style='font-size:12px;padding:3px 6px;border-radius:6px;border:1px solid #d7dade'>"
@@ -784,6 +832,8 @@ def inbox(pack: str = "", buyer: str = "", conta: str = "",
             f"{_badge_status(status)}</div>"
             f"<div class='ordbar'><span><i class='ti ti-package'></i> {titulo}</span>"
             f"<span><i class='ti ti-cash'></i> R$ {total}</span>"
+            f"<span title='Codigo do pedido no Mercado Livre / Bling'>"
+            f"<i class='ti ti-hash'></i> {selecionado.get('id', pack)}</span>"
             f"{seletor}</div>"
             f"<div class='thread'>{baloes}</div>"
             f"<form class='reply' method='post' action='/inbox/responder'>"
@@ -793,6 +843,7 @@ def inbox(pack: str = "", buyer: str = "", conta: str = "",
             f"<input type='hidden' name='cat' value='{cat}'/>"
             f"<input type='hidden' name='loja' value='{loja}'/>"
             f"<input type='hidden' name='status' value='{status}'/>"
+            f"<input type='hidden' name='q' value='{q}'/>"
             "<input name='texto' placeholder='Responder o comprador...' required/>"
             "<button class='btn ml' type='submit'>Enviar</button></form>"
         )
@@ -814,13 +865,13 @@ def inbox(pack: str = "", buyer: str = "", conta: str = "",
 @app.post("/inbox/responder")
 def inbox_responder(pack: str = Form(...), buyer: str = Form(""), conta: str = Form(""),
                     cat: str = Form(""), loja: str = Form(""), status: str = Form(""),
-                    texto: str = Form(...)):
+                    q: str = Form(""), texto: str = Form(...)):
     try:
         mercadolivre.enviar_mensagem(pack, buyer, texto, user_id=conta or None)
     except (RuntimeError, httpx.HTTPStatusError):
         pass
     return RedirectResponse(
-        f"/inbox?pack={pack}&buyer={buyer}&conta={conta}&cat={cat}&loja={loja}&status={status}",
+        f"/inbox?pack={pack}&buyer={buyer}&conta={conta}&cat={cat}&loja={loja}&status={status}&q={q}",
         status_code=303)
 
 
@@ -840,10 +891,10 @@ def ml_anexo(conta: str, filename: str):
 @app.post("/categoria/marcar")
 def categoria_marcar(pack: str = Form(...), conta: str = Form(""), buyer: str = Form(""),
                      cat: str = Form(""), loja: str = Form(""), status: str = Form(""),
-                     categoria: str = Form("")):
+                     q: str = Form(""), categoria: str = Form("")):
     categorias.marcar(pack, int(categoria) if categoria else None)
     return RedirectResponse(
-        f"/inbox?pack={pack}&buyer={buyer}&conta={conta}&cat={cat}&loja={loja}&status={status}",
+        f"/inbox?pack={pack}&buyer={buyer}&conta={conta}&cat={cat}&loja={loja}&status={status}&q={q}",
         status_code=303)
 
 

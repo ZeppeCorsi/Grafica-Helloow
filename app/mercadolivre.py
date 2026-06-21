@@ -218,6 +218,15 @@ def listar_pedidos(limite: int = 15, user_id: str | None = None,
     return resultados
 
 
+def obter_pedido(order_id: str, user_id: str | None = None,
+                 token: dict | None = None) -> dict | None:
+    """Busca um pedido do ML pelo codigo (ID do pedido). None se nao for desta conta."""
+    try:
+        return get(f"/orders/{order_id}", user_id=user_id, token=token)
+    except httpx.HTTPStatusError:
+        return None
+
+
 def listar_mensagens(pack_id: str, user_id: str | None = None,
                      token: dict | None = None) -> list[dict]:
     uid = str(user_id) if user_id else _primeiro_uid()
