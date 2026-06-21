@@ -239,14 +239,27 @@ def callback(request: Request):
     return RedirectResponse("/pedidos")
 
 
+def _data_br(iso: str) -> str:
+    """Converte '2026-06-10' (ou '2026-06-10 14:30:00') para '10/06/2026'."""
+    if not iso:
+        return "-"
+    d = str(iso)[:10]
+    partes = d.split("-")
+    return f"{partes[2]}/{partes[1]}/{partes[0]}" if len(partes) == 3 else d
+
+
 @app.get("/pedidos", response_class=HTMLResponse)
-def pedidos():
+def pedidos(pagina: int = 1):
+    pagina = max(1, pagina)
     try:
-        lista = bling.listar_pedidos(limite=20)
+        lista = bling.listar_pedidos(pagina=pagina, limite=100)
     except RuntimeError:
         return RedirectResponse("/login")
     except httpx.HTTPStatusError as e:
         return _pagina(f"<h1>Erro na API</h1><pre>{e.response.text}</pre>")
+
+    # ordena por data do pedido, mais recentes primeiro
+    lista.sort(key=lambda p: str(p.get("data") or ""), reverse=True)
 
     linhas = ""
     for p in lista:
@@ -256,22 +269,34 @@ def pedidos():
         situacao = (p.get("situacao") or {}).get("valor", "-")
         pid = p.get("id", "")
         linhas += (
-            f"<tr><td>{p.get('numero','-')}</td><td>{contato}</td>"
+            f"<tr><td>{_data_br(p.get('data'))}</td>"
+            f"<td>{p.get('numero','-')}</td><td>{contato}</td>"
             f"<td><span class='pill'>loja {loja}</span></td>"
             f"<td>R$ {total}</td><td>{situacao}</td>"
             f"<td><a href='/pedido/{pid}'>abrir &rarr;</a></td></tr>"
         )
     if not linhas:
-        linhas = "<tr><td colspan='6' class='muted'>Nenhum pedido retornado.</td></tr>"
+        linhas = "<tr><td colspan='7' class='muted'>Nenhum pedido nesta pagina.</td></tr>"
+
+    # navegacao: avanca se a pagina veio cheia (100)
+    nav = "<div style='margin-top:16px;display:flex;gap:10px;align-items:center'>"
+    if pagina > 1:
+        nav += f"<a class='btn ghost' href='/pedidos?pagina={pagina-1}'>&larr; Anteriores</a>"
+    nav += f"<span class='muted'>Pagina {pagina}</span>"
+    if len(lista) >= 100:
+        nav += f"<a class='btn ghost' href='/pedidos?pagina={pagina+1}'>Proximos &rarr;</a>"
+    nav += "</div>"
 
     corpo = (
-        "<h1>Pedidos (dados reais do Bling)</h1>"
-        "<p class='muted'>Fonte: GET /pedidos/vendas &middot; clique em \"abrir\" para ver o cliente</p>"
-        "<table><tr><th>Pedido</th><th>Cliente</th><th>Canal/Loja</th>"
+        "<h1>Pedidos (Bling)</h1>"
+        "<p class='muted'>Ordenados pela data do pedido (mais recentes primeiro) &middot; "
+        "100 por pagina</p>"
+        "<table><tr><th>Data</th><th>Pedido</th><th>Cliente</th><th>Canal/Loja</th>"
         f"<th>Total</th><th>Situacao</th><th></th></tr>{linhas}</table>"
-        "<p style='margin-top:20px'><a href='/'>&larr; inicio</a></p>"
+        f"{nav}"
+        "<p style='margin-top:16px'><a href='/'>&larr; inicio</a></p>"
     )
-    return _pagina(corpo)
+    return _pagina(corpo, ativo="pedidos")
 
 
 @app.get("/pedido/{pedido_id}", response_class=HTMLResponse)
