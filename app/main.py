@@ -200,9 +200,10 @@ def home():
     if not config.is_ml_configured():
         m = "<p class='muted'>Mercado Livre: faltam credenciais no .env.</p>"
     elif ml_contas:
-        nomes = ", ".join(c.get("nickname") or str(c.get("user_id")) for c in ml_contas)
+        nomes = ", ".join(mercadolivre.nome_exibicao(c) for c in ml_contas)
         m = (f"<p>&#10003; Mercado Livre: <b>{len(ml_contas)}</b> conta(s) &mdash; {nomes}</p>"
-             "<p><a class='btn ghost' href='/ml/login'>+ Conectar outra conta</a></p>")
+             "<p><a class='btn ghost' href='/ml/login'>+ Conectar outra conta</a> "
+             "<a class='btn ghost' href='/lojas'>Renomear lojas</a></p>")
     else:
         m = "<p><a class='btn ml' href='/ml/login'>Conectar ao Mercado Livre</a></p>"
 
@@ -611,7 +612,7 @@ def inbox(pack: str = "", buyer: str = "", conta: str = "", cat: str = ""):
     sel_conta = None
     for acc in contas:
         uid = str(acc["user_id"])
-        apelido = acc.get("nickname") or uid
+        apelido = mercadolivre.nome_exibicao(acc)
         try:
             pedidos = mercadolivre.listar_pedidos(limite=15, user_id=uid)
         except (RuntimeError, httpx.HTTPStatusError):
@@ -657,7 +658,7 @@ def inbox(pack: str = "", buyer: str = "", conta: str = "", cat: str = ""):
         total = selecionado.get("total_amount", "-")
         produtos = selecionado.get("order_items") or []
         titulo = (produtos[0].get("item") or {}).get("title", "-") if produtos else "-"
-        apelido = sel_conta.get("nickname") or conta
+        apelido = mercadolivre.nome_exibicao(sel_conta)
         try:
             mensagens = mercadolivre.listar_mensagens(pack, user_id=conta)
         except httpx.HTTPStatusError:
@@ -804,3 +805,41 @@ def categorias_renomear(id: int = Form(...), nome: str = Form(...)):
 def categorias_excluir(id: int = Form(...)):
     categorias.excluir_categoria(id)
     return RedirectResponse("/categorias", status_code=303)
+
+
+# =========================================================================== #
+# Renomear lojas (apelido amigavel por conta do Mercado Livre)
+# =========================================================================== #
+@app.get("/lojas", response_class=HTMLResponse)
+def lojas_page():
+    linhas = ""
+    for acc in mercadolivre.contas():
+        uid = str(acc["user_id"])
+        nick = acc.get("nickname") or uid
+        atual = (mercadolivre.apelido_loja(uid) or "").replace('"', "&quot;")
+        linhas += (
+            "<div style='margin:12px 0'>"
+            f"<div class='muted' style='font-size:12px'>Conta ML: {nick} &middot; id {uid}</div>"
+            "<form method='post' action='/lojas/renomear' style='display:flex;gap:6px;margin-top:4px'>"
+            f"<input type='hidden' name='uid' value='{uid}'/>"
+            f"<input name='apelido' value=\"{atual}\" "
+            "placeholder='Nome amigavel (ex: Loja Adesivos)' "
+            "style='flex:1;padding:9px;border:1px solid #d7dade;border-radius:8px'/>"
+            "<button class='btn ghost'>Salvar</button></form></div>"
+        )
+    if not linhas:
+        linhas = "<p class='muted'>Nenhuma conta conectada.</p>"
+    corpo = (
+        "<h1>Renomear lojas</h1>"
+        "<p class='muted'>Dê um nome amigável para cada conta do Mercado Livre. "
+        "Vale só aqui no hub &mdash; não muda nada no Mercado Livre.</p>"
+        f"<div class='card'>{linhas}</div>"
+        "<p><a href='/inbox'>&larr; voltar para a caixa de entrada</a></p>"
+    )
+    return _pagina(corpo, ativo="inbox")
+
+
+@app.post("/lojas/renomear")
+def lojas_renomear(uid: str = Form(...), apelido: str = Form("")):
+    mercadolivre.definir_apelido(uid, apelido.strip())
+    return RedirectResponse("/lojas", status_code=303)

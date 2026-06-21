@@ -34,6 +34,25 @@ def _primeiro_uid() -> str | None:
     return str(cs[0]["user_id"]) if cs else None
 
 
+# Apelido amigavel da loja (guardado separado do token, com chave "alias:{uid}")
+def apelido_loja(user_id: str) -> str | None:
+    rec = store.carregar(f"alias:{user_id}")
+    return rec.get("apelido") if rec else None
+
+
+def definir_apelido(user_id: str, apelido: str) -> None:
+    if apelido:
+        store.salvar(f"alias:{user_id}", {"apelido": apelido})
+    else:
+        store.remover(f"alias:{user_id}")
+
+
+def nome_exibicao(acc: dict) -> str:
+    """Nome amigavel da loja: apelido custom > nickname do ML > user_id."""
+    uid = str(acc.get("user_id"))
+    return apelido_loja(uid) or acc.get("nickname") or uid
+
+
 def seller_id(user_id: str | None = None) -> str | None:
     return str(user_id) if user_id else _primeiro_uid()
 
