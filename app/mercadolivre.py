@@ -14,6 +14,8 @@ from . import config, store
 # cache em memoria para acelerar (instancia unica no Render Starter)
 _TTL_PEDIDOS = 30          # segundos
 _cache_pedidos: dict = {}  # uid -> (timestamp, resultados)
+_TTL_UNREAD = 20
+_cache_unread: dict = {}   # uid -> (timestamp, set de packs aguardando)
 _migrado = False           # a migracao do token legado roda so 1x por processo
 
 
@@ -222,6 +224,27 @@ def listar_mensagens(pack_id: str, user_id: str | None = None,
     dados = get(f"/messages/packs/{pack_id}/sellers/{uid}", {"tag": "post_sale"},
                 user_id=uid, token=token)
     return dados.get("messages", [])
+
+
+def packs_aguardando(user_id: str | None = None, token: dict | None = None) -> set:
+    """Conjunto de packs com mensagens nao lidas (aguardando resposta da loja)."""
+    uid = str(user_id) if user_id else _primeiro_uid()
+    agora = time.time()
+    cache = _cache_unread.get(uid)
+    if cache and agora - cache[0] < _TTL_UNREAD:
+        return cache[1]
+    try:
+        dados = get("/messages/unread", {"role": "seller", "tag": "post_sale"},
+                    user_id=uid, token=token)
+    except httpx.HTTPStatusError:
+        dados = {}
+    out = set()
+    for r in (dados.get("results") or []):
+        v = r.get("id") or r.get("pack_id") or r.get("resource")
+        if v:
+            out.add(str(v).rstrip("/").split("/")[-1])
+    _cache_unread[uid] = (agora, out)
+    return out
 
 
 def enviar_mensagem(pack_id: str, comprador_id: str, texto: str,

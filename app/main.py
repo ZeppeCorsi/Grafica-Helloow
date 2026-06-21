@@ -577,38 +577,41 @@ def _anexos_html(m: dict, conta: str) -> str:
     return out
 
 
-def _rail(cats: list, cat_atual: str) -> str:
-    def item(nome, cor, on=False, off=False):
-        cls = "chan" + (" on" if on else "") + (" off" if off else "")
-        tag = "" if not off else "<span class='muted' style='font-size:11px'>em breve</span>"
-        return (f"<div class='{cls}'><span class='dot' style='background:{cor}'></span>"
-                f"<span style='flex:1'>{nome}</span>{tag}</div>")
+def _rail(cats: list, cat_atual: str, lojas: list, loja_atual: str, status_atual: str) -> str:
+    def q(**over):
+        params = {"loja": loja_atual, "cat": cat_atual, "status": status_atual}
+        params.update(over)
+        qs = "&".join(f"{k}={v}" for k, v in params.items() if v)
+        return "/inbox" + ("?" + qs if qs else "")
 
-    canais = (
-        "<div class='muted' style='padding:4px 11px 8px;font-size:11px'>CANAIS</div>"
-        + item("Todos", "#8a93a0", on=True)
-        + item("Mercado Livre", "#FFE600", on=True)
-        + item("Shopee", "#EE4D2D", off=True)
-        + item("Amazon", "#FF9900", off=True)
-        + item("WhatsApp", "#25D366", off=True)
-    )
-
-    def catlink(label, valor, ativo, icone="ti-tag"):
+    def link(label, href, ativo, icone, cor=None):
         cls = "chan" + (" on" if ativo else "")
-        return (f"<a class='{cls}' href='/inbox?cat={valor}'>"
-                f"<i class='ti {icone}' style='font-size:15px'></i>"
-                f"<span style='flex:1'>{label}</span></a>")
+        ponto = (f"<span class='dot' style='background:{cor}'></span>" if cor
+                 else f"<i class='ti {icone}' style='font-size:15px'></i>")
+        return f"<a class='{cls}' href='{href}'>{ponto}<span style='flex:1'>{label}</span></a>"
 
+    # FILTROS
+    filtros = "<div class='muted' style='padding:4px 11px 6px;font-size:11px'>FILTROS</div>"
+    filtros += link("Nao respondidas", q(status="aguardando"),
+                    status_atual == "aguardando", "ti-bell")
+
+    # LOJAS
+    lojas_html = "<div class='muted' style='padding:14px 11px 6px;font-size:11px'>LOJAS</div>"
+    lojas_html += link("Todas as lojas", q(loja=""), loja_atual == "", "ti-building-store")
+    for uid, nome in lojas:
+        lojas_html += link(nome, q(loja=uid), loja_atual == uid, "ti-building-store")
+
+    # CATEGORIAS
     cats_html = "<div class='muted' style='padding:14px 11px 6px;font-size:11px'>CATEGORIAS</div>"
-    cats_html += catlink("Todas", "", cat_atual == "", "ti-stack")
+    cats_html += link("Todas", q(cat=""), cat_atual == "", "ti-stack")
     for c in cats:
-        cats_html += catlink(c["nome"], str(c["id"]), cat_atual == str(c["id"]))
-    cats_html += catlink("Sem categoria", "none", cat_atual == "none", "ti-tag-off")
+        cats_html += link(c["nome"], q(cat=str(c["id"])), cat_atual == str(c["id"]), "ti-tag")
+    cats_html += link("Sem categoria", q(cat="none"), cat_atual == "none", "ti-tag-off")
     cats_html += ("<a class='chan' href='/categorias' style='color:#534AB7'>"
                   "<i class='ti ti-settings' style='font-size:15px'></i>"
                   "<span style='flex:1'>Gerenciar</span></a>")
 
-    return "<div class='rail'>" + canais + cats_html + "</div>"
+    return "<div class='rail'>" + filtros + lojas_html + cats_html + "</div>"
 
 
 _SPLIT_JS = """
@@ -648,7 +651,8 @@ _SPLIT_JS = """
 
 
 @app.get("/inbox", response_class=HTMLResponse)
-def inbox(pack: str = "", buyer: str = "", conta: str = "", cat: str = ""):
+def inbox(pack: str = "", buyer: str = "", conta: str = "",
+          cat: str = "", loja: str = "", status: str = ""):
     contas = mercadolivre.contas()
     if not contas:
         return RedirectResponse("/ml/login")
@@ -656,48 +660,76 @@ def inbox(pack: str = "", buyer: str = "", conta: str = "", cat: str = ""):
     cats = categorias.listar_categorias()
     nomes_cat = {c["id"]: c["nome"] for c in cats}
     marcas = categorias.marcas()  # pack -> categoria_id
+    lojas = [(str(a["user_id"]), mercadolivre.nome_exibicao(a)) for a in contas]
+    apelidos = dict(lojas)
 
-    # ---- lista de conversas (somando todas as contas) ----
-    itens = ""
+    # packs aguardando resposta (mensagens nao lidas)
+    aguardando = set()
+    for acc in contas:
+        try:
+            aguardando |= mercadolivre.packs_aguardando(str(acc["user_id"]), token=acc)
+        except (RuntimeError, httpx.HTTPStatusError):
+            pass
+
+    # ---- coleta todas as conversas (todas as contas) ----
+    convs = []
     selecionado = None
     sel_conta = None
     for acc in contas:
         uid = str(acc["user_id"])
-        apelido = mercadolivre.nome_exibicao(acc)
         try:
             pedidos = mercadolivre.listar_pedidos(limite=15, user_id=uid, token=acc)
         except (RuntimeError, httpx.HTTPStatusError):
             pedidos = []
         for o in pedidos:
-            comprador = (o.get("buyer") or {}).get("nickname", "-")
-            comprador_id = str((o.get("buyer") or {}).get("id", ""))
             pk = str(o.get("pack_id") or o.get("id"))
-            produtos = o.get("order_items") or []
-            titulo = (produtos[0].get("item") or {}).get("title", "-") if produtos else "-"
-            cat_id = marcas.get(pk)
-            cat_nome = nomes_cat.get(cat_id) if cat_id else None
-            on = pk == pack and uid == conta
-            if on:
+            if pk == pack and uid == conta:
                 selecionado, sel_conta = o, acc
-            # filtro por categoria
-            if cat == "none" and cat_id:
-                continue
-            if cat and cat != "none" and str(cat_id) != cat:
-                continue
-            etiqueta = (f"<div style='margin-top:5px'><span class='badge' "
-                        f"style='background:#EEEDFE;color:#3C3489'>{cat_nome}</span></div>"
-                        if cat_nome else "")
-            itens += (
-                f"<a class='ci {'on' if on else ''}' "
-                f"href='/inbox?pack={pk}&buyer={comprador_id}&conta={uid}&cat={cat}'>"
-                "<div class='top'>"
-                f"<span class='nm'>{comprador}</span>"
-                f"<span class='badge' style='background:#FFF7CC;color:#7a6a00'>{apelido}</span>"
-                "</div>"
-                f"<div class='pv'>{titulo}</div>{etiqueta}</a>"
-            )
+            produtos = o.get("order_items") or []
+            convs.append({
+                "pk": pk, "uid": uid,
+                "comprador": (o.get("buyer") or {}).get("nickname", "-"),
+                "comprador_id": str((o.get("buyer") or {}).get("id", "")),
+                "titulo": (produtos[0].get("item") or {}).get("title", "-") if produtos else "-",
+                "data": str(o.get("date_created") or ""),
+                "cat_id": marcas.get(pk),
+                "aguarda": pk in aguardando,
+            })
+
+    # ordena: conversas aguardando primeiro, depois pelas mais recentes
+    convs.sort(key=lambda c: (c["aguarda"], c["data"]), reverse=True)
+
+    # ---- aplica filtros e monta a lista ----
+    itens = ""
+    for c in convs:
+        if loja and c["uid"] != loja:
+            continue
+        if status == "aguardando" and not c["aguarda"]:
+            continue
+        if cat == "none" and c["cat_id"]:
+            continue
+        if cat and cat != "none" and str(c["cat_id"]) != cat:
+            continue
+        on = c["pk"] == pack and c["uid"] == conta
+        cat_nome = nomes_cat.get(c["cat_id"]) if c["cat_id"] else None
+        etiqueta = (f"<div style='margin-top:5px'><span class='badge' "
+                    f"style='background:#EEEDFE;color:#3C3489'>{cat_nome}</span></div>"
+                    if cat_nome else "")
+        sino = ("<span style='background:#FFB020;width:8px;height:8px;border-radius:50%;"
+                "flex:none;display:inline-block' title='Aguardando resposta'></span>"
+                if c["aguarda"] else "")
+        itens += (
+            f"<a class='ci {'on' if on else ''}' "
+            f"href='/inbox?pack={c['pk']}&buyer={c['comprador_id']}&conta={c['uid']}"
+            f"&cat={cat}&loja={loja}&status={status}'>"
+            "<div class='top'>"
+            f"<span class='nm' style='display:flex;align-items:center;gap:6px'>{sino}{c['comprador']}</span>"
+            f"<span class='badge' style='background:#FFF7CC;color:#7a6a00'>{apelidos.get(c['uid'])}</span>"
+            "</div>"
+            f"<div class='pv'>{c['titulo']}</div>{etiqueta}</a>"
+        )
     if not itens:
-        itens = "<div style='padding:16px' class='muted'>Nenhuma conversa nesta categoria.</div>"
+        itens = "<div style='padding:16px' class='muted'>Nenhuma conversa com esses filtros.</div>"
 
     # ---- painel de detalhe ----
     if selecionado is None:
@@ -736,6 +768,8 @@ def inbox(pack: str = "", buyer: str = "", conta: str = "", cat: str = ""):
             f"<input type='hidden' name='conta' value='{conta}'/>"
             f"<input type='hidden' name='buyer' value='{buyer}'/>"
             f"<input type='hidden' name='cat' value='{cat}'/>"
+            f"<input type='hidden' name='loja' value='{loja}'/>"
+            f"<input type='hidden' name='status' value='{status}'/>"
             "<i class='ti ti-tag'></i>"
             "<select name='categoria' onchange='this.form.submit()' "
             "style='font-size:12px;padding:3px 6px;border-radius:6px;border:1px solid #d7dade'>"
@@ -756,6 +790,9 @@ def inbox(pack: str = "", buyer: str = "", conta: str = "", cat: str = ""):
             f"<input type='hidden' name='pack' value='{pack}'/>"
             f"<input type='hidden' name='buyer' value='{buyer}'/>"
             f"<input type='hidden' name='conta' value='{conta}'/>"
+            f"<input type='hidden' name='cat' value='{cat}'/>"
+            f"<input type='hidden' name='loja' value='{loja}'/>"
+            f"<input type='hidden' name='status' value='{status}'/>"
             "<input name='texto' placeholder='Responder o comprador...' required/>"
             "<button class='btn ml' type='submit'>Enviar</button></form>"
         )
@@ -764,7 +801,7 @@ def inbox(pack: str = "", buyer: str = "", conta: str = "", cat: str = ""):
         "<link rel='stylesheet' href='https://cdn.jsdelivr.net/npm/"
         "@tabler/icons-webfont@3.11.0/dist/tabler-icons.min.css'>"
         "<div class='inbox'>"
-        + _rail(cats, cat)
+        + _rail(cats, cat, lojas, loja, status)
         + f"<div class='clist'>{itens}</div>"
         + "<div class='splitter' id='split'></div>"
         + f"<div class='detail'>{detalhe}</div>"
@@ -775,13 +812,16 @@ def inbox(pack: str = "", buyer: str = "", conta: str = "", cat: str = ""):
 
 
 @app.post("/inbox/responder")
-def inbox_responder(pack: str = Form(...), buyer: str = Form(""),
-                    conta: str = Form(""), texto: str = Form(...)):
+def inbox_responder(pack: str = Form(...), buyer: str = Form(""), conta: str = Form(""),
+                    cat: str = Form(""), loja: str = Form(""), status: str = Form(""),
+                    texto: str = Form(...)):
     try:
         mercadolivre.enviar_mensagem(pack, buyer, texto, user_id=conta or None)
     except (RuntimeError, httpx.HTTPStatusError):
         pass
-    return RedirectResponse(f"/inbox?pack={pack}&buyer={buyer}&conta={conta}", status_code=303)
+    return RedirectResponse(
+        f"/inbox?pack={pack}&buyer={buyer}&conta={conta}&cat={cat}&loja={loja}&status={status}",
+        status_code=303)
 
 
 @app.get("/ml/anexo/{conta}/{filename:path}")
@@ -799,10 +839,12 @@ def ml_anexo(conta: str, filename: str):
 # =========================================================================== #
 @app.post("/categoria/marcar")
 def categoria_marcar(pack: str = Form(...), conta: str = Form(""), buyer: str = Form(""),
-                     cat: str = Form(""), categoria: str = Form("")):
+                     cat: str = Form(""), loja: str = Form(""), status: str = Form(""),
+                     categoria: str = Form("")):
     categorias.marcar(pack, int(categoria) if categoria else None)
     return RedirectResponse(
-        f"/inbox?pack={pack}&buyer={buyer}&conta={conta}&cat={cat}", status_code=303)
+        f"/inbox?pack={pack}&buyer={buyer}&conta={conta}&cat={cat}&loja={loja}&status={status}",
+        status_code=303)
 
 
 @app.get("/categorias", response_class=HTMLResponse)
