@@ -179,3 +179,18 @@ def enviar_mensagem(pack_id: str, comprador_id: str, texto: str, user_id: str | 
     uid = seller_id(user_id)
     body = {"from": {"user_id": str(uid)}, "to": {"user_id": str(comprador_id)}, "text": texto}
     return post(f"/messages/packs/{pack_id}/sellers/{uid}?tag=post_sale", body, user_id=uid)
+
+
+def baixar_anexo(filename: str, user_id: str | None = None) -> tuple[bytes, str]:
+    """Baixa um anexo de mensagem do Mercado Livre (a arte enviada pelo cliente)."""
+    uid = seller_id(user_id)
+    token = _access_token_valido(uid)
+    r = httpx.get(
+        f"{config.ML_API_BASE}/messages/attachments/{filename}",
+        params={"tag": "post_sale", "site_id": "MLB"},
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=60,
+        follow_redirects=True,
+    )
+    r.raise_for_status()
+    return r.content, r.headers.get("content-type", "application/octet-stream")

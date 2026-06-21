@@ -10,7 +10,7 @@ import httpx
 from pathlib import Path
 
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import bling, config, mercadolivre
@@ -495,6 +495,36 @@ def _badge_status(status: str) -> str:
     return f"<span class='badge' style='background:{bg};color:{fg}'>{txt}</span>"
 
 
+def _eh_imagem(nome: str) -> bool:
+    nome = (nome or "").lower()
+    return nome.endswith((".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"))
+
+
+def _anexos_html(m: dict, conta: str) -> str:
+    """Renderiza anexos (arte do cliente) de uma mensagem do Mercado Livre."""
+    out = ""
+    anexos = m.get("message_attachments") or m.get("attachments") or []
+    for a in anexos:
+        if isinstance(a, str):
+            fn, orig = a, a
+        else:
+            fn = a.get("filename") or a.get("id")
+            orig = a.get("original_filename") or fn or "arquivo"
+        if not fn:
+            continue
+        url = f"/ml/anexo/{conta}/{fn}"
+        if _eh_imagem(orig):
+            out += (f"<a href='{url}' target='_blank'>"
+                    f"<img src='{url}' loading='lazy' "
+                    "style='max-width:230px;border-radius:8px;margin-top:6px;display:block'/></a>")
+        else:
+            safe = (orig or "arquivo").replace("<", "&lt;")
+            out += (f"<a href='{url}' target='_blank' "
+                    "style='display:inline-flex;align-items:center;gap:5px;margin-top:6px'>"
+                    f"<i class='ti ti-paperclip'></i> {safe}</a>")
+    return out
+
+
 def _rail(ativo_ml: bool) -> str:
     def item(nome, cor, on=False, off=False):
         cls = "chan" + (" on" if on else "") + (" off" if off else "")
@@ -607,7 +637,8 @@ def inbox(pack: str = "", buyer: str = "", conta: str = ""):
         for m in mensagens:
             eu = str((m.get("from") or {}).get("user_id", "")) == sid
             txt = (m.get("text") or "").replace("<", "&lt;")
-            baloes += (f"<div class='bub {'me' if eu else 'them'}'>{txt}</div>")
+            baloes += (f"<div class='bub {'me' if eu else 'them'}'>"
+                       f"{txt}{_anexos_html(m, conta)}</div>")
         if not baloes:
             baloes = "<p class='muted'>Sem mensagens nesta conversa ainda.</p>"
         detalhe = (
@@ -650,3 +681,13 @@ def inbox_responder(pack: str = Form(...), buyer: str = Form(""),
     except (RuntimeError, httpx.HTTPStatusError):
         pass
     return RedirectResponse(f"/inbox?pack={pack}&buyer={buyer}&conta={conta}", status_code=303)
+
+
+@app.get("/ml/anexo/{conta}/{filename:path}")
+def ml_anexo(conta: str, filename: str):
+    """Baixa e serve um anexo (arte) de uma mensagem do Mercado Livre."""
+    try:
+        conteudo, ctype = mercadolivre.baixar_anexo(filename, user_id=conta)
+    except Exception:
+        return Response(status_code=404)
+    return Response(content=conteudo, media_type=ctype)
