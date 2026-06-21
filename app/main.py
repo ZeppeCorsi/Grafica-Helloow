@@ -18,7 +18,20 @@ from . import bling, categorias, config, mercadolivre
 app = FastAPI(title="Hub de atendimento")
 
 # rotas acessiveis sem login
-_LIVRES = {"/entrar", "/sair", "/logo.png"}
+_LIVRES = {"/entrar", "/sair", "/logo.png", "/favicon.svg"}
+
+# Icone do Zappe Hub (inline, para cabecalho e login)
+_ICONE = (
+    "<svg viewBox='0 0 44 50' width='28' height='32' style='flex:none' aria-hidden='true'>"
+    "<rect x='3' y='3' width='38' height='34' rx='9' fill='#5546E8'/>"
+    "<path d='M12 37 L12 47 L23 37 Z' fill='#5546E8'/>"
+    "<text x='22' y='24' font-family='Arial' font-weight='800' font-size='17' fill='#fff' "
+    "text-anchor='middle'>Z</text>"
+    "<circle cx='16' cy='30' r='2.4' fill='#fff'/>"
+    "<circle cx='22' cy='30' r='2.4' fill='#fff'/>"
+    "<circle cx='28' cy='30' r='2.4' fill='#FFB020'/></svg>"
+)
+_MARCA = "Zappe <span style='color:#5546E8'>Hub</span><span style='color:#FFB020'>.</span>"
 
 
 @app.middleware("http")
@@ -40,8 +53,14 @@ def _pagina_login(erro: str = "") -> HTMLResponse:
     corpo = (
         "<div class='card' style='max-width:330px;margin:70px auto'>"
         "<div style='text-align:center;margin-bottom:18px'>"
-        "<img src='/logo.png' style='width:60px;height:60px;border-radius:50%'/>"
-        "<h3 style='margin:10px 0 0'>Hub de atendimento</h3></div>"
+        "<svg viewBox='0 0 80 80' width='62' height='62' style='display:inline-block'>"
+        "<rect x='8' y='10' width='64' height='56' rx='16' fill='#5546E8'/>"
+        "<path d='M24 66 L24 80 L42 66 Z' fill='#5546E8'/>"
+        "<text x='40' y='42' font-family='Arial' font-weight='800' font-size='28' fill='#fff' "
+        "text-anchor='middle'>Z</text>"
+        "<circle cx='29' cy='55' r='4' fill='#fff'/><circle cx='40' cy='55' r='4' fill='#fff'/>"
+        "<circle cx='51' cy='55' r='4' fill='#FFB020'/></svg>"
+        f"<h3 style='margin:10px 0 0'>{_MARCA}</h3></div>"
         f"{msg}"
         "<form method='post' action='/entrar'>"
         "<label style='font-size:13px;color:#5b6573'>Usuario</label>"
@@ -55,7 +74,8 @@ def _pagina_login(erro: str = "") -> HTMLResponse:
     )
     html = ("<!doctype html><html lang='pt-br'><meta charset='utf-8'>"
             "<meta name='viewport' content='width=device-width, initial-scale=1'>"
-            f"<title>Entrar</title><style>{_CSS}</style>{corpo}</html>")
+            "<link rel='icon' type='image/svg+xml' href='/favicon.svg'>"
+            f"<title>Entrar &middot; Zappe Hub</title><style>{_CSS}</style>{corpo}</html>")
     return HTMLResponse(html)
 
 
@@ -149,8 +169,7 @@ def _pagina(corpo: str, full: bool = False, ativo: str = "") -> HTMLResponse:
         return f"<a href='{href}' class='{'on' if ativo == key else ''}'>{label}</a>"
     nav = (
         "<div class='nav'>"
-        "<a class='brand' href='/'><img src='/logo.png' alt='logo'/>"
-        "<span>Hub de atendimento</span></a>"
+        f"<a class='brand' href='/'>{_ICONE}<span>{_MARCA}</span></a>"
         "<div class='links'>"
         + lk("/inbox", "Caixa de entrada", "inbox")
         + lk("/pedidos", "Pedidos (Bling)", "pedidos")
@@ -161,9 +180,15 @@ def _pagina(corpo: str, full: bool = False, ativo: str = "") -> HTMLResponse:
     html = (
         "<!doctype html><html lang='pt-br'><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width, initial-scale=1'>"
-        f"<title>Hub de atendimento</title><style>{_CSS}</style>{nav}{miolo}</html>"
+        "<link rel='icon' type='image/svg+xml' href='/favicon.svg'>"
+        f"<title>Zappe Hub</title><style>{_CSS}</style>{nav}{miolo}</html>"
     )
     return HTMLResponse(html)
+
+
+@app.get("/favicon.svg")
+def favicon():
+    return FileResponse(config.BASE_DIR / "zappehub-icone.svg", media_type="image/svg+xml")
 
 
 @app.get("/logo.png")
@@ -208,7 +233,8 @@ def home():
         m = "<p><a class='btn ml' href='/ml/login'>Conectar ao Mercado Livre</a></p>"
 
     corpo = (
-        "<h1>Hub de atendimento &middot; Grafica Betinho</h1>"
+        f"<h1 style='margin-bottom:2px'>{_MARCA}</h1>"
+        "<p class='muted' style='margin-top:0'>Gráfica Betinho</p>"
         + destaque
         + "<div class='card'><h3>Conexoes</h3>" + b + m + "</div>"
     )

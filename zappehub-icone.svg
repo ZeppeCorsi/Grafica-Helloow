@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80" width="80" height="80" role="img" aria-label="Zappe Hub">
+  <rect x="8" y="10" width="64" height="56" rx="16" fill="#5546E8"/>
+  <path d="M24 66 L24 80 L42 66 Z" fill="#5546E8"/>
+  <text x="40" y="42" font-family="Arial, Helvetica, sans-serif" font-weight="800" font-size="28" fill="#fff" text-anchor="middle">Z</text>
+  <circle cx="29" cy="55" r="4" fill="#fff"/>
+  <circle cx="40" cy="55" r="4" fill="#fff"/>
+  <circle cx="51" cy="55" r="4" fill="#FFB020"/>
+</svg>
