@@ -11,16 +11,25 @@ import httpx
 
 from . import config, store
 
+# cache em memoria para acelerar (instancia unica no Render Starter)
+_TTL_PEDIDOS = 30          # segundos
+_cache_pedidos: dict = {}  # uid -> (timestamp, resultados)
+_migrado = False           # a migracao do token legado roda so 1x por processo
+
 
 # --------------------------------------------------------------------------- #
 # Contas conectadas
 # --------------------------------------------------------------------------- #
 def _migrar_legado() -> None:
-    """Move um token antigo (chave 'ml', conta unica) para o novo formato."""
+    """Move um token antigo (chave 'ml', conta unica) para o novo formato. Roda 1x."""
+    global _migrado
+    if _migrado:
+        return
     antigo = store.carregar("ml")
     if antigo and antigo.get("user_id"):
         store.salvar(f"ml:{antigo['user_id']}", antigo)
         store.remover("ml")
+    _migrado = True
 
 
 def contas() -> list[dict]:
@@ -155,12 +164,21 @@ def _req(metodo: str, path: str, token: str, **kwargs) -> httpx.Response:
     )
 
 
-def _chamar(metodo: str, path: str, user_id: str | None = None, **kwargs) -> dict:
-    uid = seller_id(user_id)
-    resp = _req(metodo, path, _access_token_valido(uid), **kwargs)
+def _chamar(metodo: str, path: str, user_id: str | None = None,
+            token: dict | None = None, **kwargs) -> dict:
+    """Faz a chamada. Se 'token' (dict da conta) for passado, evita reler do banco."""
+    uid = str(user_id) if user_id else _primeiro_uid()
+    if token is None:
+        token = store.carregar(f"ml:{uid}")
+        if not token:
+            raise RuntimeError("Sem conta do Mercado Livre. Faca login em /ml/login.")
+    acesso = token.get("access_token")
+    if time.time() >= token.get("expires_at", 0):
+        token = _renovar_token(uid, token["refresh_token"])
+        acesso = token["access_token"]
+    resp = _req(metodo, path, acesso, **kwargs)
     if resp.status_code == 401:
-        token = store.carregar(f"ml:{uid}") if uid else None
-        if not token or not token.get("refresh_token"):
+        if not token.get("refresh_token"):
             raise RuntimeError("Sessao do Mercado Livre expirada. Faca login em /ml/login.")
         try:
             novo = _renovar_token(uid, token["refresh_token"])
@@ -171,33 +189,48 @@ def _chamar(metodo: str, path: str, user_id: str | None = None, **kwargs) -> dic
     return resp.json() if resp.content else {}
 
 
-def get(path: str, params: dict | None = None, user_id: str | None = None) -> dict:
-    return _chamar("GET", path, user_id=user_id, params=params or {})
+def get(path: str, params: dict | None = None, user_id: str | None = None,
+        token: dict | None = None) -> dict:
+    return _chamar("GET", path, user_id=user_id, token=token, params=params or {})
 
 
-def post(path: str, body: dict, user_id: str | None = None) -> dict:
-    return _chamar("POST", path, user_id=user_id, json=body)
+def post(path: str, body: dict, user_id: str | None = None,
+         token: dict | None = None) -> dict:
+    return _chamar("POST", path, user_id=user_id, token=token, json=body)
 
 
 # --------------------------------------------------------------------------- #
 # Pedidos e mensagens (por conta)
 # --------------------------------------------------------------------------- #
-def listar_pedidos(limite: int = 15, user_id: str | None = None) -> list[dict]:
-    uid = seller_id(user_id)
-    dados = get("/orders/search", {"seller": uid, "sort": "date_desc", "limit": limite}, user_id=uid)
-    return dados.get("results", [])
+def listar_pedidos(limite: int = 15, user_id: str | None = None,
+                   token: dict | None = None) -> list[dict]:
+    uid = str(user_id) if user_id else _primeiro_uid()
+    agora = time.time()
+    cache = _cache_pedidos.get(uid)
+    if cache and agora - cache[0] < _TTL_PEDIDOS:
+        return cache[1]
+    dados = get("/orders/search", {"seller": uid, "sort": "date_desc", "limit": limite},
+                user_id=uid, token=token)
+    resultados = dados.get("results", [])
+    _cache_pedidos[uid] = (agora, resultados)
+    return resultados
 
 
-def listar_mensagens(pack_id: str, user_id: str | None = None) -> list[dict]:
-    uid = seller_id(user_id)
-    dados = get(f"/messages/packs/{pack_id}/sellers/{uid}", {"tag": "post_sale"}, user_id=uid)
+def listar_mensagens(pack_id: str, user_id: str | None = None,
+                     token: dict | None = None) -> list[dict]:
+    uid = str(user_id) if user_id else _primeiro_uid()
+    dados = get(f"/messages/packs/{pack_id}/sellers/{uid}", {"tag": "post_sale"},
+                user_id=uid, token=token)
     return dados.get("messages", [])
 
 
-def enviar_mensagem(pack_id: str, comprador_id: str, texto: str, user_id: str | None = None) -> dict:
-    uid = seller_id(user_id)
+def enviar_mensagem(pack_id: str, comprador_id: str, texto: str,
+                    user_id: str | None = None, token: dict | None = None) -> dict:
+    uid = str(user_id) if user_id else _primeiro_uid()
     body = {"from": {"user_id": str(uid)}, "to": {"user_id": str(comprador_id)}, "text": texto}
-    return post(f"/messages/packs/{pack_id}/sellers/{uid}?tag=post_sale", body, user_id=uid)
+    _cache_pedidos.pop(uid, None)  # forca atualizar a lista apos enviar
+    return post(f"/messages/packs/{pack_id}/sellers/{uid}?tag=post_sale", body,
+                user_id=uid, token=token)
 
 
 def baixar_anexo(filename: str, user_id: str | None = None) -> tuple[bytes, str]:

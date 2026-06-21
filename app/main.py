@@ -665,7 +665,7 @@ def inbox(pack: str = "", buyer: str = "", conta: str = "", cat: str = ""):
         uid = str(acc["user_id"])
         apelido = mercadolivre.nome_exibicao(acc)
         try:
-            pedidos = mercadolivre.listar_pedidos(limite=15, user_id=uid)
+            pedidos = mercadolivre.listar_pedidos(limite=15, user_id=uid, token=acc)
         except (RuntimeError, httpx.HTTPStatusError):
             pedidos = []
         for o in pedidos:
@@ -711,7 +711,7 @@ def inbox(pack: str = "", buyer: str = "", conta: str = "", cat: str = ""):
         titulo = (produtos[0].get("item") or {}).get("title", "-") if produtos else "-"
         apelido = mercadolivre.nome_exibicao(sel_conta)
         try:
-            mensagens = mercadolivre.listar_mensagens(pack, user_id=conta)
+            mensagens = mercadolivre.listar_mensagens(pack, user_id=conta, token=sel_conta)
         except httpx.HTTPStatusError:
             mensagens = []
         sid = str(mercadolivre.seller_id(conta))
