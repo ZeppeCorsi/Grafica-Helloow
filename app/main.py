@@ -675,10 +675,11 @@ def _conv_dict(o: dict, uid: str, marcas: dict, aguardando: set) -> dict:
 
 @app.get("/inbox", response_class=HTMLResponse)
 def inbox(pack: str = "", buyer: str = "", conta: str = "",
-          cat: str = "", loja: str = "", status: str = "", q: str = ""):
+          cat: str = "", loja: str = "", status: str = "", q: str = "", pag: int = 1):
     contas = mercadolivre.contas()
     if not contas:
         return RedirectResponse("/ml/login")
+    pag = max(1, pag)
 
     cats = categorias.listar_categorias()
     nomes_cat = {c["id"]: c["nome"] for c in cats}
@@ -698,12 +699,15 @@ def inbox(pack: str = "", buyer: str = "", conta: str = "",
     convs = []
     selecionado = None
     sel_conta = None
+    tem_mais = False
     for acc in contas:
         uid = str(acc["user_id"])
         try:
-            pedidos = mercadolivre.listar_pedidos(limite=15, user_id=uid, token=acc)
+            pedidos = mercadolivre.listar_pedidos(limite=15, user_id=uid, token=acc, pagina=pag)
         except (RuntimeError, httpx.HTTPStatusError):
             pedidos = []
+        if len(pedidos) >= 15:
+            tem_mais = True
         for o in pedidos:
             convs.append(_conv_dict(o, uid, marcas, aguardando))
 
@@ -720,6 +724,13 @@ def inbox(pack: str = "", buyer: str = "", conta: str = "",
             selecionado = c["o"]
             sel_conta = next((a for a in contas if str(a["user_id"]) == conta), None)
             break
+    # se a conversa aberta nao esta na pagina atual, busca direto (sempre abre)
+    if selecionado is None and pack and conta:
+        acc = next((a for a in contas if str(a["user_id"]) == conta), None)
+        if acc:
+            o = mercadolivre.obter_pedido(pack, token=acc)
+            if o:
+                selecionado, sel_conta = o, acc
 
     # ordena: conversas aguardando primeiro, depois pelas mais recentes
     convs.sort(key=lambda c: (c["aguarda"], c["data"]), reverse=True)
@@ -753,7 +764,7 @@ def inbox(pack: str = "", buyer: str = "", conta: str = "",
         itens += (
             f"<a class='ci {'on' if on else ''}' "
             f"href='/inbox?pack={c['pk']}&buyer={c['comprador_id']}&conta={c['uid']}"
-            f"&cat={cat}&loja={loja}&status={status}&q={q}'>"
+            f"&cat={cat}&loja={loja}&status={status}&q={q}&pag={pag}'>"
             "<div class='top'>"
             f"<span class='nm' style='display:flex;align-items:center;gap:6px'>{sino}{c['comprador']}</span>"
             f"<span class='badge' style='background:#FFF7CC;color:#7a6a00'>{apelidos.get(c['uid'])}</span>"
@@ -782,7 +793,21 @@ def inbox(pack: str = "", buyer: str = "", conta: str = "",
            "title='Limpar busca'><i class='ti ti-x'></i></a>" if termo else "")
         + "</form>"
     )
-    itens = busca + itens
+
+    # navegacao de paginas (so quando nao esta buscando)
+    nav = ""
+    if not termo:
+        base = f"/inbox?cat={cat}&loja={loja}&status={status}"
+        partes = []
+        if pag > 1:
+            partes.append(f"<a class='btn ghost' href='{base}&pag={pag - 1}'>&larr; Recentes</a>")
+        partes.append(f"<span class='muted' style='font-size:12px'>Pagina {pag}</span>")
+        if tem_mais:
+            partes.append(f"<a class='btn ghost' href='{base}&pag={pag + 1}'>Mais antigas &rarr;</a>")
+        nav = ("<div style='padding:12px;display:flex;gap:8px;align-items:center;"
+               "justify-content:center;border-top:1px solid #eef0f2'>" + "".join(partes) + "</div>")
+
+    itens = busca + itens + nav
 
     # ---- painel de detalhe ----
     if selecionado is None:

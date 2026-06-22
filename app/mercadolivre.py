@@ -225,16 +225,20 @@ def post(path: str, body: dict, user_id: str | None = None,
 # Pedidos e mensagens (por conta)
 # --------------------------------------------------------------------------- #
 def listar_pedidos(limite: int = 15, user_id: str | None = None,
-                   token: dict | None = None) -> list[dict]:
+                   token: dict | None = None, pagina: int = 1) -> list[dict]:
     uid = str(user_id) if user_id else _primeiro_uid()
+    pagina = max(1, pagina)
+    chave = f"{uid}:{pagina}"
     agora = time.time()
-    cache = _cache_pedidos.get(uid)
+    cache = _cache_pedidos.get(chave)
     if cache and agora - cache[0] < _TTL_PEDIDOS:
         return cache[1]
-    dados = get("/orders/search", {"seller": uid, "sort": "date_desc", "limit": limite},
+    offset = (pagina - 1) * limite
+    dados = get("/orders/search",
+                {"seller": uid, "sort": "date_desc", "limit": limite, "offset": offset},
                 user_id=uid, token=token)
     resultados = dados.get("results", [])
-    _cache_pedidos[uid] = (agora, resultados)
+    _cache_pedidos[chave] = (agora, resultados)
     return resultados
 
 
@@ -296,7 +300,10 @@ def enviar_mensagem(pack_id: str, comprador_id: str, texto: str,
                     user_id: str | None = None, token: dict | None = None) -> dict:
     uid = str(user_id) if user_id else _primeiro_uid()
     body = {"from": {"user_id": str(uid)}, "to": {"user_id": str(comprador_id)}, "text": texto}
-    _cache_pedidos.pop(uid, None)  # forca atualizar a lista apos enviar
+    for k in list(_cache_pedidos):  # limpa o cache de todas as paginas dessa loja
+        if k.startswith(f"{uid}:"):
+            _cache_pedidos.pop(k, None)
+    _cache_unread.pop(uid, None)
     return post(f"/messages/packs/{pack_id}/sellers/{uid}?tag=post_sale", body,
                 user_id=uid, token=token)
 
