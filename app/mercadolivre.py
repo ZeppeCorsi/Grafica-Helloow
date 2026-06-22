@@ -289,9 +289,14 @@ def packs_aguardando(user_id: str | None = None, token: dict | None = None) -> s
         dados = {}
     out = set()
     for r in (dados.get("results") or []):
-        v = r.get("id") or r.get("pack_id") or r.get("resource")
-        if v:
-            out.add(str(v).rstrip("/").split("/")[-1])
+        # resource = "/packs/{PACK_ID}/sellers/{SELLER_ID}" -> extrai o PACK
+        partes = str(r.get("resource", "")).strip("/").split("/")
+        if "packs" in partes:
+            i = partes.index("packs")
+            if i + 1 < len(partes):
+                out.add(partes[i + 1])
+        elif r.get("id") or r.get("pack_id"):
+            out.add(str(r.get("id") or r.get("pack_id")))
     _cache_unread[uid] = (agora, out)
     return out
 

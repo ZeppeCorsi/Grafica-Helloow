@@ -906,29 +906,6 @@ def inbox_responder(pack: str = Form(...), buyer: str = Form(""), conta: str = F
         status_code=303)
 
 
-@app.get("/ml/diag-unread", response_class=HTMLResponse)
-def diag_unread():
-    """Diagnostico: mostra o JSON cru das 'nao lidas' do ML para acertar o filtro."""
-    import json as _json
-    out = "<h1>Diagnostico - nao lidas</h1>"
-    for acc in mercadolivre.contas():
-        uid = str(acc["user_id"])
-        for params in (
-            {"role": "seller", "tag": "post_sale"},
-            {"role": "seller", "tag": "post_sale", "site_id": "MLB"},
-            {"role": "seller"},
-        ):
-            try:
-                d = mercadolivre.get("/messages/unread", params, user_id=uid, token=acc)
-                txt = _json.dumps(d, indent=2, ensure_ascii=False)[:2500]
-            except Exception as e:
-                txt = f"ERRO: {type(e).__name__}: {e}"
-            out += (f"<h3 style='margin-top:18px'>conta {uid} &middot; params {params}</h3>"
-                    f"<pre style='background:#f4f5f7;padding:12px;border-radius:8px;"
-                    f"white-space:pre-wrap;font-size:12px'>{txt}</pre>")
-    return _pagina(out)
-
-
 @app.get("/ml/anexo/{conta}/{filename:path}")
 def ml_anexo(conta: str, filename: str):
     """Baixa e serve um anexo (arte) de uma mensagem do Mercado Livre."""
