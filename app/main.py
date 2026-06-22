@@ -638,13 +638,21 @@ _SPLIT_JS = """
   });
   // rola a conversa para a ultima mensagem
   var th=document.querySelector('.thread');if(th)th.scrollTop=th.scrollHeight;
-  // auto-atualiza a cada 25s, mas NAO enquanto o usuario digita uma resposta
+  // ao navegar (clicar numa conversa/filtro) ou enviar um form, PARA o auto-refresh
+  // para nao cancelar a navegacao -> resolve o "cancela, aperta de novo"
+  var navegando=false;
+  document.addEventListener('click',function(e){ if(e.target.closest('a')) navegando=true; },true);
+  document.addEventListener('submit',function(){ navegando=true; },true);
+  // auto-atualiza a cada 45s, mas NAO enquanto digita, arrasta ou navega
   setInterval(function(){
+    if(navegando||drag)return;
     var inp=document.querySelector('.reply input[name=texto]');
     if(inp&&(inp.value.trim()!==''||document.activeElement===inp))return;
-    if(drag)return;
+    var busca=document.querySelector('.clist input[name=q]');
+    if(busca&&document.activeElement===busca)return;
+    if(document.hidden)return;
     location.reload();
-  },25000);
+  },45000);
 })();
 </script>
 """
@@ -702,11 +710,9 @@ def inbox(pack: str = "", buyer: str = "", conta: str = "",
     # busca por codigo antigo (que nao esta na lista recente): consulta direto no ML
     termo = q.strip()
     if termo.isdigit() and not any(c["codigo"] == termo or c["pk"] == termo for c in convs):
-        for acc in contas:
-            o = mercadolivre.obter_pedido(termo, token=acc)
-            if o:
-                convs.append(_conv_dict(o, str(acc["user_id"]), marcas, aguardando))
-                break
+        o, uid_found = mercadolivre.buscar_pedido_cod(termo, contas)
+        if o:
+            convs.append(_conv_dict(o, uid_found, marcas, aguardando))
 
     # identifica a conversa selecionada
     for c in convs:

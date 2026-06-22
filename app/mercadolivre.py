@@ -16,6 +16,12 @@ _TTL_PEDIDOS = 30          # segundos
 _cache_pedidos: dict = {}  # uid -> (timestamp, resultados)
 _TTL_UNREAD = 20
 _cache_unread: dict = {}   # uid -> (timestamp, set de packs aguardando)
+_TTL_CONTAS = 15
+_cache_contas: dict = {"val": None, "ts": 0.0}
+_TTL_ALIAS = 60
+_cache_alias: dict = {}    # uid -> (timestamp, apelido)
+_TTL_BUSCA = 60
+_cache_busca: dict = {}    # codigo -> (timestamp, (pedido, uid))
 _migrado = False           # a migracao do token legado roda so 1x por processo
 
 
@@ -35,9 +41,13 @@ def _migrar_legado() -> None:
 
 
 def contas() -> list[dict]:
-    """Lista as contas do Mercado Livre conectadas."""
+    """Lista as contas do Mercado Livre conectadas (com cache curto)."""
     _migrar_legado()
-    return store.listar("ml:")
+    agora = time.time()
+    if _cache_contas["val"] is None or agora - _cache_contas["ts"] > _TTL_CONTAS:
+        _cache_contas["val"] = store.listar("ml:")
+        _cache_contas["ts"] = agora
+    return _cache_contas["val"]
 
 
 def _primeiro_uid() -> str | None:
@@ -47,15 +57,24 @@ def _primeiro_uid() -> str | None:
 
 # Apelido amigavel da loja (guardado separado do token, com chave "alias:{uid}")
 def apelido_loja(user_id: str) -> str | None:
-    rec = store.carregar(f"alias:{user_id}")
-    return rec.get("apelido") if rec else None
+    uid = str(user_id)
+    agora = time.time()
+    c = _cache_alias.get(uid)
+    if c and agora - c[0] < _TTL_ALIAS:
+        return c[1]
+    rec = store.carregar(f"alias:{uid}")
+    ap = rec.get("apelido") if rec else None
+    _cache_alias[uid] = (agora, ap)
+    return ap
 
 
 def definir_apelido(user_id: str, apelido: str) -> None:
+    uid = str(user_id)
     if apelido:
-        store.salvar(f"alias:{user_id}", {"apelido": apelido})
+        store.salvar(f"alias:{uid}", {"apelido": apelido})
     else:
-        store.remover(f"alias:{user_id}")
+        store.remover(f"alias:{uid}")
+    _cache_alias.pop(uid, None)
 
 
 def nome_exibicao(acc: dict) -> str:
@@ -76,6 +95,7 @@ def carregar_token(user_id: str | None = None) -> dict | None:
 def _salvar_token(data: dict) -> None:
     data["expires_at"] = time.time() + int(data.get("expires_in", 0)) - 60
     store.salvar(f"ml:{data['user_id']}", data)
+    _cache_contas["ts"] = 0.0  # forca recarregar as contas com o token novo
 
 
 # --------------------------------------------------------------------------- #
@@ -225,6 +245,22 @@ def obter_pedido(order_id: str, user_id: str | None = None,
         return get(f"/orders/{order_id}", user_id=user_id, token=token)
     except httpx.HTTPStatusError:
         return None
+
+
+def buscar_pedido_cod(codigo: str, contas_lista: list[dict]) -> tuple:
+    """Acha um pedido pelo codigo em qualquer conta (com cache). Retorna (pedido, uid)."""
+    agora = time.time()
+    c = _cache_busca.get(codigo)
+    if c and agora - c[0] < _TTL_BUSCA:
+        return c[1]
+    achado = (None, None)
+    for acc in contas_lista:
+        o = obter_pedido(codigo, token=acc)
+        if o:
+            achado = (o, str(acc["user_id"]))
+            break
+    _cache_busca[codigo] = (agora, achado)
+    return achado
 
 
 def listar_mensagens(pack_id: str, user_id: str | None = None,
