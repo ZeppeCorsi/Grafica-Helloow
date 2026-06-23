@@ -22,6 +22,10 @@ _TTL_ALIAS = 60
 _cache_alias: dict = {}    # uid -> (timestamp, apelido)
 _TTL_BUSCA = 60
 _cache_busca: dict = {}    # codigo -> (timestamp, (pedido, uid))
+_TTL_PERG = 25
+_cache_perg: dict = {}     # (uid, status) -> (timestamp, perguntas)
+_TTL_ITEM = 600
+_cache_item: dict = {}     # item_id -> (timestamp, titulo)
 _migrado = False           # a migracao do token legado roda so 1x por processo
 
 
@@ -310,6 +314,52 @@ def enviar_mensagem(pack_id: str, comprador_id: str, texto: str,
             _cache_pedidos.pop(k, None)
     _cache_unread.pop(uid, None)
     return post(f"/messages/packs/{pack_id}/sellers/{uid}?tag=post_sale", body,
+                user_id=uid, token=token)
+
+
+# --------------------------------------------------------------------------- #
+# Perguntas (pre-venda, no anuncio)
+# --------------------------------------------------------------------------- #
+def listar_perguntas(user_id: str | None = None, token: dict | None = None,
+                     status: str = "unanswered", limite: int = 30) -> list[dict]:
+    uid = str(user_id) if user_id else _primeiro_uid()
+    chave = (uid, status)
+    agora = time.time()
+    cache = _cache_perg.get(chave)
+    if cache and agora - cache[0] < _TTL_PERG:
+        return cache[1]
+    params = {"seller_id": uid, "api_version": "4", "limit": limite}
+    if status and status != "all":
+        params["status"] = status.upper()  # UNANSWERED / ANSWERED
+    dados = get("/questions/search", params, user_id=uid, token=token)
+    perguntas = dados.get("questions", [])
+    _cache_perg[chave] = (agora, perguntas)
+    return perguntas
+
+
+def titulo_item(item_id: str, user_id: str | None = None, token: dict | None = None) -> str:
+    if not item_id:
+        return "-"
+    agora = time.time()
+    c = _cache_item.get(item_id)
+    if c and agora - c[0] < _TTL_ITEM:
+        return c[1]
+    try:
+        d = get(f"/items/{item_id}", {"attributes": "title"}, user_id=user_id, token=token)
+        titulo = d.get("title") or str(item_id)
+    except httpx.HTTPStatusError:
+        titulo = str(item_id)
+    _cache_item[item_id] = (agora, titulo)
+    return titulo
+
+
+def responder_pergunta(question_id: str, texto: str,
+                       user_id: str | None = None, token: dict | None = None) -> dict:
+    uid = str(user_id) if user_id else _primeiro_uid()
+    _cache_perg.pop((uid, "unanswered"), None)
+    _cache_perg.pop((uid, "answered"), None)
+    _cache_perg.pop((uid, "all"), None)
+    return post("/answers", {"question_id": int(question_id), "text": texto},
                 user_id=uid, token=token)
 
 

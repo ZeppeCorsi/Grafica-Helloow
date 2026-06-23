@@ -172,6 +172,7 @@ def _pagina(corpo: str, full: bool = False, ativo: str = "") -> HTMLResponse:
         f"<a class='brand' href='/'>{_ICONE}<span>{_MARCA}</span></a>"
         "<div class='links'>"
         + lk("/inbox", "Caixa de entrada", "inbox")
+        + lk("/perguntas", "Perguntas", "perguntas")
         + lk("/pedidos", "Pedidos (Bling)", "pedidos")
         + ("<a href='/sair'>Sair</a>" if config.APP_PASSWORD else "")
         + "</div></div>"
@@ -914,6 +915,81 @@ def ml_anexo(conta: str, filename: str):
     except Exception:
         return Response(status_code=404)
     return Response(content=conteudo, media_type=ctype)
+
+
+# =========================================================================== #
+# Perguntas (pre-venda, no anuncio)
+# =========================================================================== #
+@app.get("/perguntas", response_class=HTMLResponse)
+def perguntas(status: str = "unanswered"):
+    contas = mercadolivre.contas()
+    if not contas:
+        return RedirectResponse("/ml/login")
+
+    cards = ""
+    for acc in contas:
+        uid = str(acc["user_id"])
+        apelido = mercadolivre.nome_exibicao(acc)
+        try:
+            lista = mercadolivre.listar_perguntas(user_id=uid, token=acc, status=status)
+        except (RuntimeError, httpx.HTTPStatusError):
+            lista = []
+        for qd in lista:
+            item_id = qd.get("item_id")
+            titulo = mercadolivre.titulo_item(item_id, user_id=uid, token=acc)
+            texto = (qd.get("text") or "").replace("<", "&lt;")
+            data = _data_br(qd.get("date_created"))
+            qid = qd.get("id")
+            ans = qd.get("answer") or {}
+            if ans.get("text"):
+                rodape = ("<div style='margin-top:8px;background:#E1F5EE;border-radius:8px;"
+                          "padding:8px 10px;font-size:13px'><b>Sua resposta:</b> "
+                          f"{(ans.get('text') or '').replace('<', '&lt;')}</div>")
+            else:
+                rodape = (
+                    "<form method='post' action='/perguntas/responder' "
+                    "style='display:flex;gap:8px;margin-top:10px'>"
+                    f"<input type='hidden' name='qid' value='{qid}'/>"
+                    f"<input type='hidden' name='conta' value='{uid}'/>"
+                    f"<input type='hidden' name='status' value='{status}'/>"
+                    "<input name='texto' placeholder='Responder a pergunta...' required "
+                    "style='flex:1;padding:9px;border:1px solid #d7dade;border-radius:8px'/>"
+                    "<button class='btn ml'>Responder</button></form>"
+                )
+            cards += (
+                "<div class='card'>"
+                "<div style='display:flex;justify-content:space-between;gap:8px'>"
+                f"<span class='muted' style='font-size:12px'><i class='ti ti-package'></i> {titulo}</span>"
+                f"<span class='badge' style='background:#FFF7CC;color:#7a6a00'>{apelido}</span></div>"
+                f"<div style='font-size:15px;margin:8px 0 4px'>{texto}</div>"
+                f"<div class='muted' style='font-size:12px'>{data}</div>"
+                f"{rodape}</div>"
+            )
+    if not cards:
+        cards = "<p class='muted'>Nenhuma pergunta aqui.</p>"
+
+    def tg(label, val):
+        cls = "btn ml" if status == val else "btn ghost"
+        return f"<a class='{cls}' href='/perguntas?status={val}'>{label}</a>"
+
+    topo = ("<div style='display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap'>"
+            + tg("Nao respondidas", "unanswered") + tg("Respondidas", "answered")
+            + tg("Todas", "all") + "</div>")
+    corpo = ("<link rel='stylesheet' href='https://cdn.jsdelivr.net/npm/"
+             "@tabler/icons-webfont@3.11.0/dist/tabler-icons.min.css'>"
+             "<h1>Perguntas <span class='muted' style='font-size:14px'>(pre-venda)</span></h1>"
+             f"{topo}{cards}")
+    return _pagina(corpo, ativo="perguntas")
+
+
+@app.post("/perguntas/responder")
+def perguntas_responder(qid: str = Form(...), conta: str = Form(""),
+                        status: str = Form("unanswered"), texto: str = Form(...)):
+    try:
+        mercadolivre.responder_pergunta(qid, texto, user_id=conta or None)
+    except (RuntimeError, httpx.HTTPStatusError):
+        pass
+    return RedirectResponse(f"/perguntas?status={status}", status_code=303)
 
 
 # =========================================================================== #
