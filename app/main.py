@@ -18,7 +18,7 @@ from . import bling, categorias, config, mercadolivre, usuarios
 app = FastAPI(title="Hub de atendimento")
 
 # rotas acessiveis sem login
-_LIVRES = {"/entrar", "/sair", "/logo.png", "/favicon.svg"}
+_LIVRES = {"/", "/entrar", "/sair", "/logo.png", "/favicon.svg"}
 
 # Icone do Zappe Hub (inline, para cabecalho e login)
 _ICONE = (
@@ -215,8 +215,106 @@ def logo():
     return FileResponse(config.BASE_DIR / "helloow-logo.png")
 
 
+_LANDING = """<!doctype html><html lang="pt-br"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<title>Zappe Hub - atendimento unificado para marketplaces</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,Segoe UI,Roboto,system-ui,sans-serif;color:#1E2330;background:#fff;line-height:1.6}
+a{text-decoration:none;color:inherit}
+.wrap{max-width:1000px;margin:0 auto;padding:0 20px}
+.btn{display:inline-block;background:#5546E8;color:#fff;padding:12px 22px;border-radius:10px;font-weight:600;font-size:15px}
+.btn.ghost{background:#fff;color:#5546E8;border:1px solid #d7d4f5}
+header{border-bottom:1px solid #eef0f2;position:sticky;top:0;background:#fff;z-index:5}
+header .wrap{display:flex;align-items:center;justify-content:space-between;padding:14px 20px}
+.brand{display:flex;align-items:center;gap:9px;font-weight:700;font-size:18px}
+.hero{background:#f3f1fe;padding:64px 0 56px;text-align:center}
+.hero h1{font-size:40px;line-height:1.15;letter-spacing:-1px;max-width:760px;margin:0 auto 16px}
+.hero h1 span{color:#5546E8}
+.hero p{font-size:18px;color:#5b6573;max-width:620px;margin:0 auto 26px}
+.dot{color:#FFB020}
+section{padding:54px 0}
+h2{font-size:28px;text-align:center;margin-bottom:8px;letter-spacing:-0.5px}
+.sub{text-align:center;color:#8a93a0;margin-bottom:34px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:18px}
+.feat{border:1px solid #eef0f2;border-radius:14px;padding:22px}
+.feat .ic{width:42px;height:42px;border-radius:11px;background:#f3f1fe;color:#5546E8;display:flex;align-items:center;justify-content:center;font-size:22px;margin-bottom:12px}
+.feat h3{font-size:17px;margin-bottom:5px}
+.feat p{color:#6b7280;font-size:14px}
+.planos{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px}
+.plano{border:1px solid #e6e8eb;border-radius:16px;padding:24px 20px;text-align:center}
+.plano.top{border:2px solid #5546E8;position:relative}
+.tag{position:absolute;top:-12px;left:50%;transform:translateX(-50%);background:#5546E8;color:#fff;font-size:12px;padding:3px 14px;border-radius:999px}
+.plano .nm{font-weight:700;font-size:18px}
+.plano .at{color:#8a93a0;font-size:14px;margin:4px 0 12px}
+.plano .pr{font-size:30px;font-weight:800}
+.plano .pr small{font-size:14px;color:#8a93a0;font-weight:400}
+.ctaband{background:#1E2330;color:#fff;text-align:center;border-radius:18px;padding:44px 20px;margin:10px 0 50px}
+.ctaband h2{color:#fff}.ctaband p{color:#c7c9d1;margin-bottom:22px}
+footer{border-top:1px solid #eef0f2;padding:26px 0;color:#8a93a0;font-size:13px;text-align:center}
+@media(max-width:640px){.hero h1{font-size:30px}}
+</style>
+
+<header><div class="wrap">
+  <a class="brand" href="/">
+    <svg viewBox="0 0 44 50" width="30" height="34" aria-hidden="true">
+      <rect x="3" y="3" width="38" height="34" rx="9" fill="#5546E8"/>
+      <path d="M12 37 L12 47 L23 37 Z" fill="#5546E8"/>
+      <text x="22" y="24" font-family="Arial" font-weight="800" font-size="17" fill="#fff" text-anchor="middle">Z</text>
+      <circle cx="16" cy="30" r="2.4" fill="#fff"/><circle cx="22" cy="30" r="2.4" fill="#fff"/><circle cx="28" cy="30" r="2.4" fill="#FFB020"/>
+    </svg>
+    <span>Zappe <span style="color:#5546E8">Hub</span><span class="dot">.</span></span>
+  </a>
+  <a class="btn" href="/entrar">Entrar</a>
+</div></header>
+
+<div class="hero"><div class="wrap">
+  <h1>Todos os seus marketplaces, <span>uma conversa só</span>.</h1>
+  <p>O Zappe Hub reune as mensagens e perguntas do Mercado Livre num so lugar &mdash; com categorias, equipe e relatorios. Atenda mais rapido, sem trocar de aba.</p>
+  <a class="btn" href="/entrar">Comecar agora</a>
+</div></div>
+
+<section><div class="wrap">
+  <h2>Tudo o que o seu atendimento precisa</h2>
+  <p class="sub">Pos-venda e pre-venda, varias contas, organizado e com a sua equipe.</p>
+  <div class="grid">
+    <div class="feat"><div class="ic"><i class="ti ti-messages"></i></div><h3>Caixa unificada</h3><p>Mensagens de varias contas do Mercado Livre num lugar so, com a arte enviada pelo cliente.</p></div>
+    <div class="feat"><div class="ic"><i class="ti ti-help-circle"></i></div><h3>Perguntas do anuncio</h3><p>Responda a pre-venda (perguntas no anuncio) sem sair do hub.</p></div>
+    <div class="feat"><div class="ic"><i class="ti ti-tags"></i></div><h3>Categorias e filtros</h3><p>Organize por tipo, loja e veja so as nao respondidas.</p></div>
+    <div class="feat"><div class="ic"><i class="ti ti-search"></i></div><h3>Busca por codigo</h3><p>Ache qualquer pedido na hora pelo codigo, cliente ou produto.</p></div>
+    <div class="feat"><div class="ic"><i class="ti ti-users"></i></div><h3>Equipe e papeis</h3><p>Cada atendente com seu login. Admin controla tudo.</p></div>
+    <div class="feat"><div class="ic"><i class="ti ti-chart-bar"></i></div><h3>Desempenho</h3><p>Veja quem atendeu o que e quanto cada um respondeu.</p></div>
+  </div>
+</div></section>
+
+<section style="background:#f6f7f9"><div class="wrap">
+  <h2>Planos para cada tamanho de equipe</h2>
+  <p class="sub">Escolha pelo numero de atendentes. Comece pequeno e cresca quando precisar.</p>
+  <div class="planos">
+    <div class="plano"><div class="nm">Essencial</div><div class="at">ate 3 atendentes</div><div class="pr">R$ 99<small>/mes</small></div></div>
+    <div class="plano top"><div class="tag">Mais popular</div><div class="nm">Profissional</div><div class="at">ate 10 atendentes</div><div class="pr">R$ 199<small>/mes</small></div></div>
+    <div class="plano"><div class="nm">Avancado</div><div class="at">ate 20 atendentes</div><div class="pr">R$ 349<small>/mes</small></div></div>
+    <div class="plano"><div class="nm">Empresarial</div><div class="at">ate 50 atendentes</div><div class="pr">R$ 599<small>/mes</small></div></div>
+  </div>
+</div></section>
+
+<section><div class="wrap"><div class="ctaband">
+  <h2>Pronto para unificar seu atendimento?</h2>
+  <p>Centralize Mercado Livre, organize sua equipe e atenda mais rapido.</p>
+  <a class="btn ghost" href="/entrar">Entrar no Zappe Hub</a>
+</div></div></section>
+
+<footer>Zappe Hub &middot; atendimento unificado para marketplaces &middot; feito no Brasil</footer>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.11.0/dist/tabler-icons.min.css">
+</html>"""
+
+
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
+    # visitante (nao logado) ve a landing comercial; logado ve o painel
+    if config.APP_PASSWORD and not request.session.get("auth"):
+        return HTMLResponse(_LANDING)
     if not config.is_configured():
         return _pagina(
             "<h1>Hub de atendimento</h1>"
