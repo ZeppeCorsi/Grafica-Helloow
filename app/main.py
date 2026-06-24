@@ -292,9 +292,9 @@ footer{border-top:1px solid #eef0f2;padding:26px 0;color:#8a93a0;font-size:13px;
   <h2>Planos para cada tamanho de equipe</h2>
   <p class="sub">Escolha pelo numero de atendentes. Comece pequeno e cresca quando precisar.</p>
   <div class="planos">
-    <div class="plano"><div class="nm">Essencial</div><div class="at">ate 3 atendentes</div><div class="pr">R$ 99<small>/mes</small></div></div>
-    <div class="plano top"><div class="tag">Mais popular</div><div class="nm">Profissional</div><div class="at">ate 10 atendentes</div><div class="pr">R$ 199<small>/mes</small></div></div>
-    <div class="plano"><div class="nm">Avancado</div><div class="at">ate 20 atendentes</div><div class="pr">R$ 349<small>/mes</small></div></div>
+    <div class="plano"><div class="nm">Essencial</div><div class="at">ate 3 atendentes</div><div class="pr">R$ 199<small>/mes</small></div></div>
+    <div class="plano top"><div class="tag">Mais popular</div><div class="nm">Profissional</div><div class="at">ate 10 atendentes</div><div class="pr">R$ 299<small>/mes</small></div></div>
+    <div class="plano"><div class="nm">Avancado</div><div class="at">ate 20 atendentes</div><div class="pr">R$ 399<small>/mes</small></div></div>
     <div class="plano"><div class="nm">Empresarial</div><div class="at">ate 50 atendentes</div><div class="pr">R$ 599<small>/mes</small></div></div>
   </div>
 </div></section>
