@@ -13,7 +13,7 @@ from fastapi import FastAPI, Form, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import bling, categorias, config, mercadolivre
+from . import bling, categorias, config, mercadolivre, usuarios
 
 app = FastAPI(title="Hub de atendimento")
 
@@ -86,12 +86,22 @@ def entrar_form():
 
 @app.post("/entrar")
 def entrar(request: Request, usuario: str = Form(...), senha: str = Form(...)):
-    ok = (secrets.compare_digest(usuario, config.APP_USER)
-          and secrets.compare_digest(senha, config.APP_PASSWORD or ""))
-    if ok:
-        request.session["auth"] = True
+    # 1) usuarios da equipe (banco)
+    u = usuarios.autenticar(usuario.strip(), senha)
+    if u:
+        request.session.update({"auth": True, "nome": u["nome"], "papel": u["papel"]})
+        return RedirectResponse("/", status_code=303)
+    # 2) usuario mestre (env) - sempre admin, rede de seguranca
+    if (config.APP_PASSWORD and secrets.compare_digest(usuario.strip(), config.APP_USER)
+            and secrets.compare_digest(senha, config.APP_PASSWORD)):
+        request.session.update({"auth": True, "nome": config.APP_USER, "papel": "admin"})
         return RedirectResponse("/", status_code=303)
     return _pagina_login("Usuario ou senha incorretos.")
+
+
+def _atual(request: Request) -> tuple[str, str]:
+    """Nome e papel do usuario logado."""
+    return request.session.get("nome", ""), request.session.get("papel", "atendente")
 
 
 @app.get("/sair")
@@ -164,16 +174,24 @@ h1{font-size:22px}h3{font-size:16px;font-weight:600}
 """
 
 
-def _pagina(corpo: str, full: bool = False, ativo: str = "") -> HTMLResponse:
+def _pagina(corpo: str, full: bool = False, ativo: str = "",
+            papel: str = "", nome: str = "") -> HTMLResponse:
     def lk(href, label, key):
         return f"<a href='{href}' class='{'on' if ativo == key else ''}'>{label}</a>"
+    admin_links = ""
+    if papel == "admin":
+        admin_links = lk("/usuarios", "Equipe", "usuarios") + lk("/desempenho", "Desempenho", "desempenho")
+    user_chip = (f"<span class='muted' style='font-size:12px;margin-right:4px'>"
+                 f"<i class='ti ti-user'></i> {nome}</span>" if nome else "")
     nav = (
         "<div class='nav'>"
         f"<a class='brand' href='/'>{_ICONE}<span>{_MARCA}</span></a>"
-        "<div class='links'>"
+        "<div class='links' style='display:flex;align-items:center'>"
         + lk("/inbox", "Caixa de entrada", "inbox")
         + lk("/perguntas", "Perguntas", "perguntas")
         + lk("/pedidos", "Pedidos (Bling)", "pedidos")
+        + admin_links
+        + user_chip
         + ("<a href='/sair'>Sair</a>" if config.APP_PASSWORD else "")
         + "</div></div>"
     )
@@ -198,7 +216,7 @@ def logo():
 
 
 @app.get("/", response_class=HTMLResponse)
-def home():
+def home(request: Request):
     if not config.is_configured():
         return _pagina(
             "<h1>Hub de atendimento</h1>"
@@ -233,13 +251,14 @@ def home():
     else:
         m = "<p><a class='btn ml' href='/ml/login'>Conectar ao Mercado Livre</a></p>"
 
+    nome, papel = _atual(request)
     corpo = (
         f"<h1 style='margin-bottom:2px'>{_MARCA}</h1>"
         "<p class='muted' style='margin-top:0'>Gráfica Betinho</p>"
         + destaque
         + "<div class='card'><h3>Conexoes</h3>" + b + m + "</div>"
     )
-    return _pagina(corpo)
+    return _pagina(corpo, papel=papel, nome=nome)
 
 
 @app.get("/login")
@@ -276,7 +295,7 @@ def _data_br(iso: str) -> str:
 
 
 @app.get("/pedidos", response_class=HTMLResponse)
-def pedidos(pagina: int = 1):
+def pedidos(request: Request, pagina: int = 1):
     pagina = max(1, pagina)
     try:
         lista = bling.listar_pedidos(pagina=pagina, limite=100)
@@ -323,7 +342,8 @@ def pedidos(pagina: int = 1):
         f"{nav}"
         "<p style='margin-top:16px'><a href='/'>&larr; inicio</a></p>"
     )
-    return _pagina(corpo, ativo="pedidos")
+    nome, papel = _atual(request)
+    return _pagina(corpo, ativo="pedidos", papel=papel, nome=nome)
 
 
 @app.get("/pedido/{pedido_id}", response_class=HTMLResponse)
@@ -675,7 +695,7 @@ def _conv_dict(o: dict, uid: str, marcas: dict, aguardando: set) -> dict:
 
 
 @app.get("/inbox", response_class=HTMLResponse)
-def inbox(pack: str = "", buyer: str = "", conta: str = "",
+def inbox(request: Request, pack: str = "", buyer: str = "", conta: str = "",
           cat: str = "", loja: str = "", status: str = "", q: str = "", pag: int = 1):
     contas = mercadolivre.contas()
     if not contas:
@@ -891,15 +911,18 @@ def inbox(pack: str = "", buyer: str = "", conta: str = "",
         + "</div>"
         + _SPLIT_JS
     )
-    return _pagina(corpo, full=True, ativo="inbox")
+    nome, papel = _atual(request)
+    return _pagina(corpo, full=True, ativo="inbox", papel=papel, nome=nome)
 
 
 @app.post("/inbox/responder")
-def inbox_responder(pack: str = Form(...), buyer: str = Form(""), conta: str = Form(""),
-                    cat: str = Form(""), loja: str = Form(""), status: str = Form(""),
-                    q: str = Form(""), texto: str = Form(...)):
+def inbox_responder(request: Request, pack: str = Form(...), buyer: str = Form(""),
+                    conta: str = Form(""), cat: str = Form(""), loja: str = Form(""),
+                    status: str = Form(""), q: str = Form(""), texto: str = Form(...)):
     try:
         mercadolivre.enviar_mensagem(pack, buyer, texto, user_id=conta or None)
+        nome, _ = _atual(request)
+        usuarios.registrar(nome, "Respondeu mensagem", f"pedido {pack}")
     except (RuntimeError, httpx.HTTPStatusError):
         pass
     return RedirectResponse(
@@ -921,7 +944,7 @@ def ml_anexo(conta: str, filename: str):
 # Perguntas (pre-venda, no anuncio)
 # =========================================================================== #
 @app.get("/perguntas", response_class=HTMLResponse)
-def perguntas(status: str = "unanswered"):
+def perguntas(request: Request, status: str = "unanswered"):
     contas = mercadolivre.contas()
     if not contas:
         return RedirectResponse("/ml/login")
@@ -979,14 +1002,17 @@ def perguntas(status: str = "unanswered"):
              "@tabler/icons-webfont@3.11.0/dist/tabler-icons.min.css'>"
              "<h1>Perguntas <span class='muted' style='font-size:14px'>(pre-venda)</span></h1>"
              f"{topo}{cards}")
-    return _pagina(corpo, ativo="perguntas")
+    nome, papel = _atual(request)
+    return _pagina(corpo, ativo="perguntas", papel=papel, nome=nome)
 
 
 @app.post("/perguntas/responder")
-def perguntas_responder(qid: str = Form(...), conta: str = Form(""),
+def perguntas_responder(request: Request, qid: str = Form(...), conta: str = Form(""),
                         status: str = Form("unanswered"), texto: str = Form(...)):
     try:
         mercadolivre.responder_pergunta(qid, texto, user_id=conta or None)
+        nome, _ = _atual(request)
+        usuarios.registrar(nome, "Respondeu pergunta", f"pergunta {qid}")
     except (RuntimeError, httpx.HTTPStatusError):
         pass
     return RedirectResponse(f"/perguntas?status={status}", status_code=303)
@@ -1094,3 +1120,102 @@ def lojas_page():
 def lojas_renomear(uid: str = Form(...), apelido: str = Form("")):
     mercadolivre.definir_apelido(uid, apelido.strip())
     return RedirectResponse("/lojas", status_code=303)
+
+
+# =========================================================================== #
+# Equipe (usuarios) e Desempenho (log) - apenas admin
+# =========================================================================== #
+@app.get("/usuarios", response_class=HTMLResponse)
+def usuarios_page(request: Request):
+    nome, papel = _atual(request)
+    if papel != "admin":
+        return RedirectResponse("/inbox")
+    linhas = ""
+    for u in usuarios.listar_usuarios():
+        linhas += (
+            "<div style='display:flex;justify-content:space-between;align-items:center;"
+            "border-bottom:1px solid #eef0f2;padding:8px 0'>"
+            f"<div><b>{u['nome']}</b> <span class='muted'>({u['usuario']})</span> "
+            f"<span class='badge' style='background:#EEEDFE;color:#3C3489'>{u['papel']}</span></div>"
+            "<form method='post' action='/usuarios/excluir' "
+            "onsubmit=\"return confirm('Remover usuario?')\">"
+            f"<input type='hidden' name='id' value='{u['id']}'/>"
+            "<button class='btn' style='background:#FCEBEB;color:#A32D2D'>Remover</button>"
+            "</form></div>"
+        )
+    if not linhas:
+        linhas = "<p class='muted'>Nenhum usuario cadastrado ainda.</p>"
+    corpo = (
+        "<h1>Equipe</h1>"
+        "<div class='card'><h3>Adicionar usuario</h3>"
+        "<form method='post' action='/usuarios/criar' style='display:grid;gap:8px;max-width:420px'>"
+        "<input name='nome' placeholder='Nome (ex: Maria)' required "
+        "style='padding:9px;border:1px solid #d7dade;border-radius:8px'/>"
+        "<input name='usuario' placeholder='Login (ex: maria)' required "
+        "style='padding:9px;border:1px solid #d7dade;border-radius:8px'/>"
+        "<input name='senha' type='password' placeholder='Senha' required "
+        "style='padding:9px;border:1px solid #d7dade;border-radius:8px'/>"
+        "<select name='papel' style='padding:9px;border:1px solid #d7dade;border-radius:8px'>"
+        "<option value='atendente'>Atendente</option>"
+        "<option value='admin'>Administrador</option></select>"
+        "<button class='btn'>Adicionar</button></form></div>"
+        f"<div class='card'><h3>Usuarios</h3>{linhas}</div>"
+        "<p class='muted'>O login mestre (Diego) continua sempre valendo como admin.</p>"
+    )
+    return _pagina(corpo, ativo="usuarios", papel=papel, nome=nome)
+
+
+@app.post("/usuarios/criar")
+def usuarios_criar(request: Request, nome: str = Form(...), usuario: str = Form(...),
+                   senha: str = Form(...), papel: str = Form("atendente")):
+    if _atual(request)[1] != "admin":
+        return RedirectResponse("/inbox")
+    usuarios.criar_usuario(nome.strip(), usuario.strip(), senha, papel)
+    return RedirectResponse("/usuarios", status_code=303)
+
+
+@app.post("/usuarios/excluir")
+def usuarios_excluir(request: Request, id: int = Form(...)):
+    if _atual(request)[1] != "admin":
+        return RedirectResponse("/inbox")
+    usuarios.excluir_usuario(id)
+    return RedirectResponse("/usuarios", status_code=303)
+
+
+@app.get("/desempenho", response_class=HTMLResponse)
+def desempenho(request: Request):
+    nome, papel = _atual(request)
+    if papel != "admin":
+        return RedirectResponse("/inbox")
+    res = usuarios.resumo()
+    if res:
+        cards = "<div style='display:flex;gap:10px;flex-wrap:wrap;margin:10px 0 22px'>"
+        for r in res:
+            cards += (f"<div style='background:#f4f5f7;border-radius:10px;padding:12px 18px'>"
+                      f"<div class='muted' style='font-size:12px'>{r['usuario'] or '-'}</div>"
+                      f"<div style='font-size:22px;font-weight:600'>{r['total']}</div>"
+                      "<div class='muted' style='font-size:11px'>atendimentos</div></div>")
+        cards += "</div>"
+    else:
+        cards = "<p class='muted'>Sem atividade registrada ainda.</p>"
+
+    linhas = ""
+    for l in usuarios.listar_log(200):
+        try:
+            quando = l["ts"].strftime("%d/%m/%Y %H:%M")
+        except Exception:
+            quando = str(l["ts"])
+        linhas += (f"<tr><td>{quando}</td><td>{l['usuario'] or '-'}</td>"
+                   f"<td>{l['acao']}</td><td>{l['alvo']}</td></tr>")
+    if not linhas:
+        linhas = "<tr><td colspan='4' class='muted'>Sem registros ainda.</td></tr>"
+
+    corpo = (
+        "<h1>Desempenho</h1>"
+        "<h3>Atendimentos por pessoa</h3>"
+        f"{cards}"
+        "<h3>Historico &mdash; quem atendeu o que</h3>"
+        "<table><tr><th>Quando</th><th>Usuario</th><th>Acao</th><th>Alvo</th></tr>"
+        f"{linhas}</table>"
+    )
+    return _pagina(corpo, ativo="desempenho", papel=papel, nome=nome)
