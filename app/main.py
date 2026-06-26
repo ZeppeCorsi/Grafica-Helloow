@@ -1410,7 +1410,7 @@ def resultado(request: Request, de: str = "", ate: str = ""):
     ate = ate or hoje.isoformat()
 
     linhas = ""
-    t_venda = t_com = t_frete = t_custo = t_imp = t_liq = 0.0
+    t_venda = t_com = t_frete = t_arec = t_custo = t_imp = t_liq = 0.0
     for acc in mercadolivre.contas():
         uid = str(acc["user_id"])
         try:
@@ -1423,30 +1423,33 @@ def resultado(request: Request, de: str = "", ate: str = ""):
                 venda = sum(float(it.get("unit_price") or 0) * float(it.get("quantity") or 0)
                             for it in (o.get("order_items") or []))
             comissao = sum(float(it.get("sale_fee") or 0) for it in (o.get("order_items") or []))
+            frete = cfg["frete"]
+            a_receber = venda - comissao - frete  # o que o ML deposita
             custo = venda * cfg["custo_pct"] / 100
             imposto = venda * cfg["imposto_pct"] / 100
-            frete = cfg["frete"]
-            liquido = venda - comissao - frete - custo - imposto
+            liquido = a_receber - custo - imposto
             margem = (liquido / venda * 100) if venda else 0
             t_venda += venda; t_com += comissao; t_frete += frete
-            t_custo += custo; t_imp += imposto; t_liq += liquido
+            t_arec += a_receber; t_custo += custo; t_imp += imposto; t_liq += liquido
             cor = "#0F6E56" if liquido >= 0 else "#A32D2D"
             produtos = o.get("order_items") or []
             titulo = (produtos[0].get("item") or {}).get("title", "-") if produtos else "-"
             linhas += (
                 f"<tr><td>{_data_br(o.get('date_created'))}</td><td>{o.get('id','-')}</td>"
-                f"<td>{titulo[:34]}</td><td>{_moeda(venda)}</td><td>{_moeda(comissao)}</td>"
+                f"<td>{titulo[:32]}</td><td>{_moeda(venda)}</td><td>{_moeda(comissao)}</td>"
+                f"<td>{_moeda(frete)}</td><td style='font-weight:500'>{_moeda(a_receber)}</td>"
                 f"<td>{_moeda(custo)}</td><td>{_moeda(imposto)}</td>"
                 f"<td style='color:{cor};font-weight:500'>{_moeda(liquido)}</td>"
                 f"<td style='color:{cor}'>{margem:.0f}%</td></tr>"
             )
     if not linhas:
-        linhas = "<tr><td colspan='9' class='muted'>Sem pedidos recentes.</td></tr>"
+        linhas = "<tr><td colspan='11' class='muted'>Nenhum pedido no periodo.</td></tr>"
 
     margem_media = (t_liq / t_venda * 100) if t_venda else 0
     cards = (
         "<div style='display:flex;gap:12px;flex-wrap:wrap;margin:12px 0 22px'>"
         f"<div style='background:#f4f5f7;border-radius:10px;padding:12px 18px'><div class='muted' style='font-size:12px'>Faturamento</div><div style='font-size:20px;font-weight:600'>{_moeda(t_venda)}</div></div>"
+        f"<div style='background:#f4f5f7;border-radius:10px;padding:12px 18px'><div class='muted' style='font-size:12px'>A receber (ML)</div><div style='font-size:20px;font-weight:600'>{_moeda(t_arec)}</div></div>"
         f"<div style='background:#f4f5f7;border-radius:10px;padding:12px 18px'><div class='muted' style='font-size:12px'>Custos + taxas</div><div style='font-size:20px;font-weight:600'>{_moeda(t_com + t_frete + t_custo + t_imp)}</div></div>"
         f"<div style='background:#EEEDFE;border-radius:10px;padding:12px 18px'><div class='muted' style='font-size:12px'>Lucro liquido</div><div style='font-size:20px;font-weight:700;color:#3C3489'>{_moeda(t_liq)}</div></div>"
         f"<div style='background:#f4f5f7;border-radius:10px;padding:12px 18px'><div class='muted' style='font-size:12px'>Margem media</div><div style='font-size:20px;font-weight:600'>{margem_media:.0f}%</div></div>"
@@ -1473,36 +1476,14 @@ def resultado(request: Request, de: str = "", ate: str = ""):
         f"Custo {cfg['custo_pct']:g}% &middot; Imposto {cfg['imposto_pct']:g}% &middot; "
         f"Frete {_moeda(cfg['frete'])}/pedido &middot; <a href='/resultado/config'>ajustar</a></p>"
         f"{form_periodo}{aviso}{cards}"
-        "<table><tr><th>Data</th><th>Pedido</th><th>Produto</th><th>Venda</th>"
-        "<th>Comissao</th><th>Custo</th><th>Imposto</th><th>Liquido</th><th>Margem</th></tr>"
-        f"{linhas}</table>"
-        "<p class='muted' style='margin-top:12px;font-size:12px'>Comissao = real do Mercado Livre. "
-        "Custo e imposto = % configurados. Frete = valor medio configurado.</p>"
+        "<div style='overflow-x:auto'><table style='min-width:760px'>"
+        "<tr><th>Data</th><th>Pedido</th><th>Produto</th><th>Venda</th><th>Comissao</th>"
+        "<th>Frete</th><th>A receber</th><th>Custo</th><th>Imposto</th><th>Liquido</th>"
+        f"<th>Margem</th></tr>{linhas}</table></div>"
+        "<p class='muted' style='margin-top:12px;font-size:12px'>Venda e <b>comissao</b> = reais do "
+        "Mercado Livre. <b>A receber</b> = venda &minus; comissao &minus; frete (o que cai na conta). "
+        "Custo e imposto = % configurados; frete = medio configurado.</p>"
     )
     return _pagina(corpo, ativo="resultado", papel=papel, nome=nome)
 
 
-@app.get("/resultado/diag", response_class=HTMLResponse)
-def resultado_diag(request: Request):
-    """Diagnostico: JSON cru de um pedido (para achar frete e valor a receber)."""
-    if _atual(request)[1] != "admin":
-        return RedirectResponse("/inbox")
-    import json as _json
-    out = "<h1>Diagnostico - 1 pedido</h1>"
-    for acc in mercadolivre.contas():
-        uid = str(acc["user_id"])
-        try:
-            pedidos = mercadolivre.listar_pedidos(limite=1, user_id=uid, token=acc)
-        except Exception as e:
-            out += f"<p>conta {uid}: erro {e}</p>"
-            continue
-        if not pedidos:
-            continue
-        o = pedidos[0]
-        det = mercadolivre.obter_pedido(str(o.get("id")), token=acc) or o
-        out += (f"<h3>conta {uid} &middot; pedido {o.get('id')}</h3>"
-                "<pre style='background:#f4f5f7;padding:12px;border-radius:8px;"
-                "white-space:pre-wrap;font-size:11px;max-height:520px;overflow:auto'>"
-                f"{_json.dumps(det, indent=2, ensure_ascii=False)[:6000]}</pre>")
-        break  # so um pedido ja basta
-    return _pagina(out, ativo="resultado")
