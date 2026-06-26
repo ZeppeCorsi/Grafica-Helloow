@@ -4,6 +4,7 @@ Rodar:
     uvicorn app.main:app --reload
 Depois abra http://localhost:8000 no navegador.
 """
+import calendar
 import secrets
 from datetime import date
 
@@ -14,7 +15,8 @@ from fastapi import FastAPI, Form, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import bling, categorias, config, mercadolivre, store, usuarios
+from . import (bling, categorias, config, financeiro, ia_consumo, mercadolivre,
+               produtos, store, usuarios)
 
 app = FastAPI(title="Hub de atendimento")
 
@@ -181,7 +183,9 @@ def _pagina(corpo: str, full: bool = False, ativo: str = "",
         return f"<a href='{href}' class='{'on' if ativo == key else ''}'>{label}</a>"
     admin_links = ""
     if papel == "admin":
-        admin_links = (lk("/resultado", "Resultado", "resultado")
+        admin_links = (lk("/produtos", "Produtos", "produtos")
+                       + lk("/resultado", "Resultado", "resultado")
+                       + lk("/financeiro", "Financeiro", "financeiro")
                        + lk("/usuarios", "Equipe", "usuarios")
                        + lk("/desempenho", "Desempenho", "desempenho"))
     user_chip = (f"<span class='muted' style='font-size:12px;margin-right:4px'>"
@@ -1371,7 +1375,8 @@ def resultado_config(request: Request):
         f"<input name='custo_pct' value='{cfg['custo_pct']:g}' "
         "style='width:100%;padding:9px;border:1px solid #d7dade;border-radius:8px'/>"
         "<div class='muted' style='font-size:11px'>Ex: 20 = o produto custa 20% do valor da venda. "
-        "(Quando tiver o custo no Bling, da para puxar o real.)</div></div>"
+        "Usado so para os produtos SEM custo preenchido na aba <a href='/produtos'>Produtos</a> "
+        "(la voce poe o custo real de cada anuncio).</div></div>"
         "<div><label style='font-size:13px;color:#5b6573'>% de imposto sobre a venda</label>"
         f"<input name='imposto_pct' value='{cfg['imposto_pct']:g}' "
         "style='width:100%;padding:9px;border:1px solid #d7dade;border-radius:8px'/>"
@@ -1399,19 +1404,14 @@ def resultado_config_salvar(request: Request, custo_pct: str = Form("20"),
     return RedirectResponse("/resultado", status_code=303)
 
 
-@app.get("/resultado", response_class=HTMLResponse)
-def resultado(request: Request, de: str = "", ate: str = ""):
-    nome, papel = _atual(request)
-    if papel != "admin":
-        return RedirectResponse("/inbox")
-    cfg = _preco_cfg()
-    hoje = date.today()
-    de = de or hoje.replace(day=1).isoformat()
-    ate = ate or hoje.isoformat()
-
+def _calc_resultado(de: str, ate: str, cfg: dict):
+    """Percorre os pedidos do periodo e devolve (linhas_html, totais, n_pedidos).
+    Usado pela aba Resultado (tabela) e pelo Fechamento (so os totais)."""
     linhas = ""
-    n_pedidos = 0
-    t_venda = t_com = t_frete = t_arec = t_custo = t_imp = t_liq = 0.0
+    n = 0
+    custos_prod = produtos.custos()  # {item_id: custo real} carregado 1x
+    t = {"venda": 0.0, "com": 0.0, "frete": 0.0, "arec": 0.0,
+         "custo": 0.0, "imp": 0.0, "liq": 0.0}
     for acc in mercadolivre.contas():
         uid = str(acc["user_id"])
         try:
@@ -1419,7 +1419,7 @@ def resultado(request: Request, de: str = "", ate: str = ""):
         except (RuntimeError, httpx.HTTPStatusError):
             pedidos = []
         for o in pedidos:
-            n_pedidos += 1
+            n += 1
             venda = float(o.get("total_amount") or 0)
             if not venda:
                 venda = sum(float(it.get("unit_price") or 0) * float(it.get("quantity") or 0)
@@ -1427,12 +1427,21 @@ def resultado(request: Request, de: str = "", ate: str = ""):
             comissao = sum(float(it.get("sale_fee") or 0) for it in (o.get("order_items") or []))
             frete = cfg["frete"]
             a_receber = venda - comissao - frete  # o que o ML deposita
-            custo = venda * cfg["custo_pct"] / 100
+            # custo: usa o custo REAL do produto (aba Produtos) quando preenchido;
+            # senao, cai no % configurado para a parte daquele item.
+            custo = 0.0
+            for it in (o.get("order_items") or []):
+                qtd = float(it.get("quantity") or 0)
+                venda_it = float(it.get("unit_price") or 0) * qtd
+                item_id = str((it.get("item") or {}).get("id") or "")
+                real = custos_prod.get(item_id)
+                custo += (real * qtd) if real is not None else (venda_it * cfg["custo_pct"] / 100)
             imposto = venda * cfg["imposto_pct"] / 100
             liquido = a_receber - custo - imposto
             margem = (liquido / venda * 100) if venda else 0
-            t_venda += venda; t_com += comissao; t_frete += frete
-            t_arec += a_receber; t_custo += custo; t_imp += imposto; t_liq += liquido
+            t["venda"] += venda; t["com"] += comissao; t["frete"] += frete
+            t["arec"] += a_receber; t["custo"] += custo; t["imp"] += imposto
+            t["liq"] += liquido
             cor = "#0F6E56" if liquido >= 0 else "#A32D2D"
             produtos = o.get("order_items") or []
             titulo = (produtos[0].get("item") or {}).get("title", "-") if produtos else "-"
@@ -1444,6 +1453,22 @@ def resultado(request: Request, de: str = "", ate: str = ""):
                 f"<td style='color:{cor};font-weight:500'>{_moeda(liquido)}</td>"
                 f"<td style='color:{cor}'>{margem:.0f}%</td></tr>"
             )
+    return linhas, t, n
+
+
+@app.get("/resultado", response_class=HTMLResponse)
+def resultado(request: Request, de: str = "", ate: str = ""):
+    nome, papel = _atual(request)
+    if papel != "admin":
+        return RedirectResponse("/inbox")
+    cfg = _preco_cfg()
+    hoje = date.today()
+    de = de or hoje.replace(day=1).isoformat()
+    ate = ate or hoje.isoformat()
+
+    linhas, t, n_pedidos = _calc_resultado(de, ate, cfg)
+    t_venda, t_com, t_frete = t["venda"], t["com"], t["frete"]
+    t_arec, t_custo, t_imp, t_liq = t["arec"], t["custo"], t["imp"], t["liq"]
     if not linhas:
         linhas = "<tr><td colspan='11' class='muted'>Nenhum pedido no periodo.</td></tr>"
 
@@ -1488,5 +1513,422 @@ def resultado(request: Request, de: str = "", ate: str = ""):
         "Custo e imposto = % configurados; frete = medio configurado.</p>"
     )
     return _pagina(corpo, ativo="resultado", papel=papel, nome=nome)
+
+
+# --------------------------------------------------------------------------- #
+# Financeiro: contador de consumo de IA + custos fixos + fechamento do mes
+# --------------------------------------------------------------------------- #
+def _mes_br(ym: str) -> str:
+    nomes = ["", "jan", "fev", "mar", "abr", "mai", "jun",
+             "jul", "ago", "set", "out", "nov", "dez"]
+    try:
+        a, m = ym.split("-")
+        return f"{nomes[int(m)]}/{a}"
+    except Exception:
+        return ym
+
+
+@app.get("/financeiro", response_class=HTMLResponse)
+def financeiro_page(request: Request):
+    nome, papel = _atual(request)
+    if papel != "admin":
+        return RedirectResponse("/inbox")
+
+    hoje = date.today()
+    pl = ia_consumo.plano()
+    res = ia_consumo.resumo_mes()
+    cambio = pl["cambio"]
+    custo_brl = res["custo_usd"] * cambio
+
+    usados = res["total"]
+    limite = max(1, pl["limite"])
+    pct = min(100, usados / limite * 100)
+    barra_cor = "#0F6E56" if pct < 80 else ("#C77700" if pct < 100 else "#A32D2D")
+
+    # projecao linear do mes (com base no dia de hoje)
+    dias_mes = calendar.monthrange(hoje.year, hoje.month)[1]
+    proj = round(usados / hoje.day * dias_mes) if hoje.day else usados
+    proj_brl = (custo_brl / hoje.day * dias_mes) if hoje.day else custo_brl
+
+    pt = res["por_tipo"]
+    n_texto = pt.get("texto", {}).get("n", 0)
+    n_foto = pt.get("foto", {}).get("n", 0)
+    c_texto = pt.get("texto", {}).get("custo_usd", 0.0) * cambio
+    c_foto = pt.get("foto", {}).get("custo_usd", 0.0) * cambio
+
+    # margem do pacote: o que voce cobra vs o que custa de verdade
+    margem_reais = pl["preco_pacote"] - custo_brl
+    margem_pct = (margem_reais / pl["preco_pacote"] * 100) if pl["preco_pacote"] else 0
+    excedente_qtd = max(0, usados - limite)
+    excedente_cobr = excedente_qtd * pl["excedente"]
+
+    card_ia = (
+        "<div class='card'>"
+        "<div style='display:flex;justify-content:space-between;align-items:center'>"
+        "<h3 style='margin:0'>&#129302; Consumo de IA &middot; "
+        f"<span class='muted' style='font-weight:400'>{_mes_br(res['mes'])}</span></h3>"
+        "<a class='muted' href='/financeiro/plano' style='font-size:13px'>ajustar plano</a></div>"
+        f"<div style='display:flex;justify-content:space-between;margin:14px 0 6px'>"
+        f"<b>{usados}</b> de {limite} interacoes incluidas"
+        f"<span class='muted'>{pct:.0f}%</span></div>"
+        "<div style='background:#e9ebef;border-radius:999px;height:12px;overflow:hidden'>"
+        f"<div style='width:{pct:.0f}%;height:100%;background:{barra_cor}'></div></div>"
+        "<div style='display:flex;gap:12px;flex-wrap:wrap;margin-top:16px'>"
+        f"<div style='background:#f4f5f7;border-radius:10px;padding:12px 16px'>"
+        f"<div class='muted' style='font-size:12px'>Custo real (sua conta API)</div>"
+        f"<div style='font-size:20px;font-weight:600'>{_moeda(custo_brl)}</div></div>"
+        f"<div style='background:#f4f5f7;border-radius:10px;padding:12px 16px'>"
+        f"<div class='muted' style='font-size:12px'>Projecao do mes</div>"
+        f"<div style='font-size:20px;font-weight:600'>{proj} int &middot; {_moeda(proj_brl)}</div></div>"
+        f"<div style='background:#EEEDFE;border-radius:10px;padding:12px 16px'>"
+        f"<div class='muted' style='font-size:12px'>Voce cobra (pacote)</div>"
+        f"<div style='font-size:20px;font-weight:700;color:#3C3489'>{_moeda(pl['preco_pacote'])}</div></div>"
+        f"<div style='background:#f4f5f7;border-radius:10px;padding:12px 16px'>"
+        f"<div class='muted' style='font-size:12px'>Margem do pacote</div>"
+        f"<div style='font-size:20px;font-weight:600;color:#0F6E56'>{_moeda(margem_reais)} "
+        f"<span style='font-size:13px'>({margem_pct:.0f}%)</span></div></div>"
+        "</div>"
+        "<table style='margin-top:16px'>"
+        "<tr><th>Tipo de interacao</th><th>Qtd</th><th>Custo (R$)</th></tr>"
+        f"<tr><td>Analise (texto)</td><td>{n_texto}</td><td>{_moeda(c_texto)}</td></tr>"
+        f"<tr><td>Leitura de boleto/nota (foto)</td><td>{n_foto}</td><td>{_moeda(c_foto)}</td></tr>"
+        "</table>"
+        + (f"<p class='muted' style='font-size:12.5px;margin-top:10px'>"
+           f"Excedente: <b>{excedente_qtd}</b> interacoes acima do limite &rarr; "
+           f"cobrar +{_moeda(excedente_cobr)} (a {_moeda(pl['excedente'])}/interacao).</p>"
+           if excedente_qtd else "")
+        + "<div style='margin-top:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap'>"
+        "<span class='muted' style='font-size:12px'>Testar o contador:</span>"
+        "<form method='post' action='/financeiro/ia/simular' style='display:inline'>"
+        "<input type='hidden' name='tipo' value='texto'>"
+        "<button class='btn ghost' style='padding:6px 12px;font-size:12.5px'>+ 1 analise (texto)</button></form>"
+        "<form method='post' action='/financeiro/ia/simular' style='display:inline'>"
+        "<input type='hidden' name='tipo' value='foto'>"
+        "<button class='btn ghost' style='padding:6px 12px;font-size:12.5px'>+ 1 leitura (foto)</button></form>"
+        "</div>"
+        "</div>"
+    )
+
+    # ---- custos fixos ----
+    custos = financeiro.listar_custos()
+    tot_fixos = sum(c["valor"] for c in custos)
+    if custos:
+        linhas_cx = "".join(
+            f"<tr><td>{c['nome']}</td><td>{_moeda(c['valor'])}</td>"
+            f"<td style='text-align:right'><form method='post' action='/financeiro/custo/excluir' "
+            f"style='display:inline' onsubmit=\"return confirm('Remover este custo?')\">"
+            f"<input type='hidden' name='id' value='{c['id']}'>"
+            f"<button class='btn ghost' style='padding:3px 10px;font-size:12px'>remover</button>"
+            f"</form></td></tr>" for c in custos)
+    else:
+        linhas_cx = "<tr><td colspan='3' class='muted'>Nenhum custo fixo cadastrado ainda.</td></tr>"
+    card_custos = (
+        "<div class='card'>"
+        "<h3 style='margin-top:0'>&#127974; Custos fixos do mes</h3>"
+        "<p class='muted' style='margin-top:-4px'>Aluguel, salarios, embalagem, software, contador&hellip;</p>"
+        "<table><tr><th>Descricao</th><th>Valor</th><th></th></tr>"
+        f"{linhas_cx}"
+        f"<tr><td style='font-weight:600'>Total</td><td style='font-weight:600'>{_moeda(tot_fixos)}</td><td></td></tr>"
+        "</table>"
+        "<form method='post' action='/financeiro/custo' "
+        "style='display:flex;gap:8px;margin-top:14px;flex-wrap:wrap'>"
+        "<input name='nome' placeholder='Ex: Aluguel' required "
+        "style='flex:1;min-width:160px;padding:9px;border:1px solid #d7dade;border-radius:8px'/>"
+        "<input name='valor' placeholder='0,00' required "
+        "style='width:120px;padding:9px;border:1px solid #d7dade;border-radius:8px'/>"
+        "<button class='btn'>Adicionar</button></form>"
+        "</div>"
+    )
+
+    # ---- fechamento do mes ----
+    cfg = _preco_cfg()
+    ini = hoje.replace(day=1).isoformat()
+    try:
+        _, tt, n_ped = _calc_resultado(ini, hoje.isoformat(), cfg)
+        vendas_liq = tt["liq"]
+        faturamento = tt["venda"]
+    except (RuntimeError, httpx.HTTPStatusError):
+        vendas_liq = faturamento = 0.0
+        n_ped = 0
+    resultado_final = vendas_liq - tot_fixos - custo_brl
+    cor_fim = "#0F6E56" if resultado_final >= 0 else "#A32D2D"
+
+    def _linha_fech(rotulo, valor, cor="#1f2430", sinal=""):
+        return (f"<div style='display:flex;justify-content:space-between;padding:9px 0;"
+                f"border-bottom:1px solid #eef0f2'><span>{rotulo}</span>"
+                f"<span style='font-weight:600;color:{cor}'>{sinal}{_moeda(abs(valor))}</span></div>")
+
+    card_fech = (
+        "<div class='card'>"
+        f"<h3 style='margin-top:0'>&#128202; Fechamento de {_mes_br(res['mes'])}</h3>"
+        f"<p class='muted' style='margin-top:-4px'>{n_ped} pedidos no mes &middot; "
+        f"faturamento {_moeda(faturamento)}</p>"
+        + _linha_fech("Lucro liquido das vendas", vendas_liq, "#0F6E56", "+ ")
+        + _linha_fech("Custos fixos", -tot_fixos, "#A32D2D", "&minus; ")
+        + _linha_fech("Custo de IA", -custo_brl, "#A32D2D", "&minus; ")
+        + "<div style='display:flex;justify-content:space-between;padding:13px 0 2px'>"
+        f"<span style='font-weight:700'>Resultado final</span>"
+        f"<span style='font-weight:700;font-size:18px;color:{cor_fim}'>{_moeda(resultado_final)}</span></div>"
+        "<p class='muted' style='font-size:12px;margin-top:10px'>Lucro das vendas vem da aba "
+        "<a href='/resultado'>Resultado</a> (ML, mes atual). O <b>A pagar / A receber do Bling</b> "
+        "(notas e boletos) entra aqui quando ativarmos o escopo Financeiro do Bling.</p>"
+        "</div>"
+    )
+
+    card_bling = (
+        "<div class='card' style='background:#FFF7E6;border-color:#FAD89B'>"
+        "<h3 style='margin-top:0'>&#129534; Contas a pagar / a receber (Bling) "
+        "<span class='pill'>em breve</span></h3>"
+        "<p class='muted' style='margin:0'>Vamos puxar notas e boletos direto do Bling para "
+        "projetar o caixa e avisar vencimentos. Precisa adicionar o escopo <b>Financeiro</b> no "
+        "app do Bling e reconectar &mdash; aviso quando for a hora.</p>"
+        "</div>"
+    )
+
+    corpo = (
+        "<h1>Financeiro</h1>"
+        "<p class='muted'>Consumo de IA, custos fixos e o fechamento do mes num lugar so.</p>"
+        f"{card_ia}{card_fech}{card_custos}{card_bling}"
+    )
+    return _pagina(corpo, ativo="financeiro", papel=papel, nome=nome)
+
+
+@app.post("/financeiro/ia/simular")
+def financeiro_ia_simular(request: Request, tipo: str = Form("texto")):
+    if _atual(request)[1] != "admin":
+        return RedirectResponse("/inbox")
+    # modelo padrao por tipo: foto le com Haiku (barato), texto analisa com Sonnet
+    modelo = "haiku" if tipo == "foto" else "sonnet"
+    ia_consumo.registrar(tipo if tipo in ia_consumo.PERFIS else "texto", modelo=modelo)
+    return RedirectResponse("/financeiro", status_code=303)
+
+
+@app.post("/financeiro/custo")
+def financeiro_custo_add(request: Request, nome: str = Form(...), valor: str = Form("0")):
+    if _atual(request)[1] != "admin":
+        return RedirectResponse("/inbox")
+    nome = nome.strip()
+    if nome:
+        financeiro.adicionar_custo(nome, _num(valor, 0))
+    return RedirectResponse("/financeiro", status_code=303)
+
+
+@app.post("/financeiro/custo/excluir")
+def financeiro_custo_del(request: Request, id: int = Form(...)):
+    if _atual(request)[1] != "admin":
+        return RedirectResponse("/inbox")
+    financeiro.remover_custo(id)
+    return RedirectResponse("/financeiro", status_code=303)
+
+
+@app.get("/financeiro/plano", response_class=HTMLResponse)
+def financeiro_plano(request: Request):
+    nome, papel = _atual(request)
+    if papel != "admin":
+        return RedirectResponse("/inbox")
+    pl = ia_consumo.plano()
+    corpo = (
+        "<h1>Plano de IA</h1>"
+        "<p class='muted'>Quanto voce cobra do cliente pela inteligencia financeira e o limite "
+        "incluido. O custo real da API e calculado automaticamente.</p>"
+        "<div class='card' style='max-width:520px'>"
+        "<form method='post' action='/financeiro/plano' style='display:grid;gap:16px'>"
+        "<div><label style='font-size:13px;color:#5b6573'>Interacoes incluidas no pacote (mes)</label>"
+        f"<input name='limite' value='{pl['limite']}' "
+        "style='width:100%;padding:9px;border:1px solid #d7dade;border-radius:8px'/></div>"
+        "<div><label style='font-size:13px;color:#5b6573'>Preco do pacote (R$/mes)</label>"
+        f"<input name='preco_pacote' value='{pl['preco_pacote']:g}' "
+        "style='width:100%;padding:9px;border:1px solid #d7dade;border-radius:8px'/></div>"
+        "<div><label style='font-size:13px;color:#5b6573'>Excedente por interacao (R$)</label>"
+        f"<input name='excedente' value='{pl['excedente']:g}' "
+        "style='width:100%;padding:9px;border:1px solid #d7dade;border-radius:8px'/>"
+        "<div class='muted' style='font-size:11px'>Cobrado por interacao acima do limite.</div></div>"
+        "<div><label style='font-size:13px;color:#5b6573'>Cambio US$ &rarr; R$</label>"
+        f"<input name='cambio' value='{pl['cambio']:g}' "
+        "style='width:100%;padding:9px;border:1px solid #d7dade;border-radius:8px'/>"
+        "<div class='muted' style='font-size:11px'>Usado para converter o custo da API (em dolar).</div></div>"
+        "<button class='btn'>Salvar</button></form></div>"
+        "<p style='margin-top:14px'><a href='/financeiro'>&larr; voltar ao financeiro</a></p>"
+    )
+    return _pagina(corpo, ativo="financeiro", papel=papel, nome=nome)
+
+
+@app.post("/financeiro/plano")
+def financeiro_plano_salvar(request: Request, limite: str = Form("500"),
+                            preco_pacote: str = Form("79"), excedente: str = Form("0.40"),
+                            cambio: str = Form("5.50")):
+    if _atual(request)[1] != "admin":
+        return RedirectResponse("/inbox")
+    ia_consumo.salvar_plano(
+        limite=int(_num(limite, 500)), preco_pacote=_num(preco_pacote, 79),
+        excedente=_num(excedente, 0.40), cambio=_num(cambio, 5.50), markup=3.0)
+    return RedirectResponse("/financeiro", status_code=303)
+
+
+# --------------------------------------------------------------------------- #
+# Produtos: lista anuncios do ML e guarda o custo de cada um (alimenta a margem)
+# --------------------------------------------------------------------------- #
+_STATUS_PROD = {
+    "active": ("Ativo", "#0F6E56", "#E5F4EE"),
+    "paused": ("Pausado", "#C77700", "#FCF1DD"),
+    "closed": ("Encerrado", "#8a93a0", "#EEF0F2"),
+    "under_review": ("Em revisao", "#A32D2D", "#FBEAEA"),
+}
+
+
+def _badge_prod(status: str) -> str:
+    rot, cor, bg = _STATUS_PROD.get(status, (status or "-", "#5b6573", "#EEF0F2"))
+    return f"<span class='badge' style='color:{cor};background:{bg}'>{rot}</span>"
+
+
+def _val_input(v) -> str:
+    return ("%.2f" % v).replace(".", ",") if v is not None else ""
+
+
+@app.get("/produtos", response_class=HTMLResponse)
+def produtos_page(request: Request, conta: str = "", pend: str = ""):
+    nome, papel = _atual(request)
+    if papel != "admin":
+        return RedirectResponse("/inbox")
+
+    contas = mercadolivre.contas()
+    if not contas:
+        corpo = ("<h1>Produtos</h1><div class='card'>Nenhuma conta do Mercado Livre "
+                 "conectada ainda. <a href='/ml/login'>Conectar conta</a></div>")
+        return _pagina(corpo, ativo="produtos", papel=papel, nome=nome)
+
+    custos = produtos.custos()
+    so_pend = pend == "1"
+
+    secoes = ""
+    total = com_custo = 0
+    erro = False
+    for acc in contas:
+        uid = str(acc["user_id"])
+        if conta and conta != uid:
+            continue
+        loja = mercadolivre.nome_exibicao(acc)
+        try:
+            itens = mercadolivre.listar_produtos(user_id=uid, token=acc)
+        except (RuntimeError, httpx.HTTPStatusError):
+            erro = True
+            secoes += (f"<div class='card'><b>{loja}</b><div class='muted'>"
+                       "Nao consegui carregar os anuncios desta conta agora.</div></div>")
+            continue
+
+        linhas = ""
+        n_loja = 0
+        for p in itens:
+            iid = str(p.get("id") or "")
+            custo = custos.get(iid)
+            total += 1
+            if custo is not None:
+                com_custo += 1
+            if so_pend and custo is not None:
+                continue
+            n_loja += 1
+            preco = float(p.get("price") or 0)
+            sku = p.get("seller_custom_field") or "&mdash;"
+            titulo = p.get("title") or iid
+            foto = p.get("secure_thumbnail") or p.get("thumbnail") or ""
+            link = p.get("permalink") or "#"
+            img = (f"<img src='{foto}' style='width:38px;height:38px;border-radius:7px;"
+                   "object-fit:cover;background:#eee'/>" if foto else "")
+            if custo is not None and preco:
+                mb = (preco - custo) / preco * 100
+                mb_cor = "#0F6E56" if mb >= 0 else "#A32D2D"
+                margem = f"<span style='color:{mb_cor}'>{mb:.0f}%</span>"
+            else:
+                margem = "<span class='muted'>&mdash;</span>"
+            busca = f"{titulo} {p.get('seller_custom_field') or ''}".lower().replace("'", "")
+            linhas += (
+                f"<tr data-s=\"{busca}\">"
+                f"<td>{img}</td>"
+                f"<td><a href='{link}' target='_blank'>{titulo[:60]}</a>"
+                f"<div class='muted' style='font-size:11px'>{iid} &middot; SKU {sku}</div></td>"
+                f"<td>{_badge_prod(p.get('status'))}</td>"
+                f"<td>{_moeda(preco)}</td>"
+                f"<td><div style='display:flex;align-items:center;gap:4px'>"
+                f"<span class='muted' style='font-size:12px'>R$</span>"
+                f"<input name='c_{iid}' value='{_val_input(custo)}' placeholder='0,00' "
+                "inputmode='decimal' style='width:90px;padding:7px;border:1px solid #d7dade;"
+                "border-radius:7px'/></div></td>"
+                f"<td style='text-align:right'>{margem}</td></tr>"
+            )
+        if not linhas:
+            linhas = ("<tr><td colspan='6' class='muted'>"
+                      + ("Todos os produtos ja tem custo. &#127881;" if so_pend
+                         else "Nenhum anuncio nesta conta.") + "</td></tr>")
+        secoes += (
+            f"<h3 style='margin:22px 0 6px'>{loja} "
+            f"<span class='muted' style='font-weight:400;font-size:13px'>"
+            f"&middot; {n_loja} anuncio(s)</span></h3>"
+            "<table><tr><th></th><th>Produto</th><th>Status</th><th>Preco</th>"
+            "<th>Custo (R$)</th><th style='text-align:right'>Margem bruta</th></tr>"
+            f"{linhas}</table>"
+        )
+
+    pct = (com_custo / total * 100) if total else 0
+    barra_cor = "#0F6E56" if pct >= 80 else ("#C77700" if pct >= 30 else "#A32D2D")
+    resumo = (
+        "<div class='card'>"
+        f"<div style='display:flex;justify-content:space-between;margin-bottom:6px'>"
+        f"<b>{com_custo}</b> de {total} produtos com custo preenchido"
+        f"<span class='muted'>{pct:.0f}%</span></div>"
+        "<div style='background:#e9ebef;border-radius:999px;height:10px;overflow:hidden'>"
+        f"<div style='width:{pct:.0f}%;height:100%;background:{barra_cor}'></div></div>"
+        "</div>"
+    )
+
+    # filtros (conta + so pendentes) + busca
+    opts = "<option value=''>Todas as lojas</option>" + "".join(
+        f"<option value='{a['user_id']}' {'selected' if conta == str(a['user_id']) else ''}>"
+        f"{mercadolivre.nome_exibicao(a)}</option>" for a in contas)
+    filtros = (
+        "<div style='display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:6px 0 14px'>"
+        "<form method='get' action='/produtos' style='display:flex;gap:8px;align-items:center'>"
+        f"<select name='conta' onchange='this.form.submit()' "
+        f"style='padding:8px;border:1px solid #d7dade;border-radius:8px'>{opts}</select>"
+        f"<label class='muted' style='font-size:13px;display:flex;gap:5px;align-items:center'>"
+        f"<input type='checkbox' name='pend' value='1' {'checked' if so_pend else ''} "
+        "onchange='this.form.submit()'/> so sem custo</label></form>"
+        "<input id='busca' oninput='filtrarProd()' placeholder='Buscar por titulo ou SKU' "
+        "style='flex:1;min-width:200px;padding:9px;border:1px solid #d7dade;border-radius:8px'/>"
+        "</div>"
+    )
+    js = ("<script>function filtrarProd(){var q=document.getElementById('busca')"
+          ".value.toLowerCase();document.querySelectorAll('tr[data-s]').forEach("
+          "function(tr){tr.style.display=tr.getAttribute('data-s').indexOf(q)>=0?'':'none';});}"
+          "</script>")
+
+    corpo = (
+        "<form method='post' action='/produtos/salvar'>"
+        "<div style='display:flex;justify-content:space-between;align-items:center'>"
+        "<h1 style='margin-bottom:4px'>Produtos</h1>"
+        "<button class='btn'>Salvar custos</button></div>"
+        "<p class='muted'>Preencha o custo de producao de cada anuncio. Ele entra automaticamente "
+        "no calculo de margem (Resultado e Financeiro). Quem nao tiver custo usa o % configurado.</p>"
+        f"{resumo}{filtros}{secoes}"
+        "<div style='margin-top:18px'><button class='btn'>Salvar custos</button></div>"
+        "</form>" + js
+    )
+    return _pagina(corpo, ativo="produtos", papel=papel, nome=nome)
+
+
+@app.post("/produtos/salvar")
+async def produtos_salvar(request: Request):
+    if _atual(request)[1] != "admin":
+        return RedirectResponse("/inbox")
+    form = await request.form()
+    mapa: dict = {}
+    for k, v in form.items():
+        if not k.startswith("c_"):
+            continue
+        item_id = k[2:]
+        s = str(v).strip()
+        mapa[item_id] = None if s == "" else _num(s, 0)
+    if mapa:
+        produtos.definir_varios(mapa)
+    return RedirectResponse("/produtos", status_code=303)
 
 

@@ -28,6 +28,8 @@ _TTL_ITEM = 600
 _cache_item: dict = {}     # item_id -> (timestamp, titulo)
 _TTL_PERIODO = 300
 _cache_periodo: dict = {}  # (uid, de, ate) -> (timestamp, pedidos)
+_TTL_PRODUTOS = 300
+_cache_produtos: dict = {}  # uid -> (timestamp, lista de produtos)
 _migrado = False           # a migracao do token legado roda so 1x por processo
 
 
@@ -390,6 +392,70 @@ def responder_pergunta(question_id: str, texto: str,
     _cache_perg.pop((uid, "all"), None)
     return post("/answers", {"question_id": int(question_id), "text": texto},
                 user_id=uid, token=token)
+
+
+# --------------------------------------------------------------------------- #
+# Produtos (anuncios do vendedor)
+# --------------------------------------------------------------------------- #
+def _todos_item_ids(uid: str, token: dict | None) -> list[str]:
+    """IDs de todos os anuncios da conta, paginando via 'scan' (sem teto de 1000)."""
+    ids: list[str] = []
+    scroll: str | None = None
+    for _ in range(300):  # teto de seguranca: 300 x 100 = 30 mil anuncios
+        params = {"search_type": "scan", "limit": 100}
+        if scroll:
+            params["scroll_id"] = scroll
+        try:
+            dados = get(f"/users/{uid}/items/search", params, user_id=uid, token=token)
+        except httpx.HTTPStatusError:
+            break
+        res = dados.get("results") or []
+        if not res:
+            break
+        ids.extend(res)
+        scroll = dados.get("scroll_id")
+        if not scroll:
+            break
+    return ids
+
+
+def _detalhes_itens(ids: list[str], uid: str, token: dict | None) -> list[dict]:
+    """Detalhes dos anuncios em lotes de 20 (multiget /items?ids=...)."""
+    attrs = ("id,title,price,available_quantity,status,sold_quantity,"
+             "seller_custom_field,secure_thumbnail,thumbnail,permalink")
+    out: list[dict] = []
+    for i in range(0, len(ids), 20):
+        lote = ids[i:i + 20]
+        try:
+            dados = get("/items", {"ids": ",".join(lote), "attributes": attrs},
+                        user_id=uid, token=token)
+        except httpx.HTTPStatusError:
+            continue
+        for entry in (dados if isinstance(dados, list) else []):
+            if entry.get("code") == 200 and entry.get("body"):
+                out.append(entry["body"])
+    return out
+
+
+def listar_produtos(user_id: str | None = None, token: dict | None = None) -> list[dict]:
+    """Todos os anuncios de uma conta (id, titulo, preco, sku, status, foto). Cache 5min."""
+    uid = str(user_id) if user_id else _primeiro_uid()
+    agora = time.time()
+    cache = _cache_produtos.get(uid)
+    if cache and agora - cache[0] < _TTL_PRODUTOS:
+        return cache[1]
+    ids = _todos_item_ids(uid, token)
+    itens = _detalhes_itens(ids, uid, token)
+    itens.sort(key=lambda p: (p.get("title") or "").lower())
+    _cache_produtos[uid] = (agora, itens)
+    return itens
+
+
+def invalidar_produtos(user_id: str | None = None) -> None:
+    if user_id:
+        _cache_produtos.pop(str(user_id), None)
+    else:
+        _cache_produtos.clear()
 
 
 def baixar_anexo(filename: str, user_id: str | None = None) -> tuple[bytes, str]:
