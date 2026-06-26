@@ -249,7 +249,7 @@ def listar_pedidos(limite: int = 15, user_id: str | None = None,
 
 
 def pedidos_periodo(de: str, ate: str, user_id: str | None = None,
-                    token: dict | None = None, max_paginas: int = 12) -> list[dict]:
+                    token: dict | None = None, max_paginas: int = 80) -> list[dict]:
     """Todos os pedidos de uma conta entre as datas de/ate (YYYY-MM-DD)."""
     uid = str(user_id) if user_id else _primeiro_uid()
     chave = (uid, de, ate)

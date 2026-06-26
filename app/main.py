@@ -1410,6 +1410,7 @@ def resultado(request: Request, de: str = "", ate: str = ""):
     ate = ate or hoje.isoformat()
 
     linhas = ""
+    n_pedidos = 0
     t_venda = t_com = t_frete = t_arec = t_custo = t_imp = t_liq = 0.0
     for acc in mercadolivre.contas():
         uid = str(acc["user_id"])
@@ -1418,6 +1419,7 @@ def resultado(request: Request, de: str = "", ate: str = ""):
         except (RuntimeError, httpx.HTTPStatusError):
             pedidos = []
         for o in pedidos:
+            n_pedidos += 1
             venda = float(o.get("total_amount") or 0)
             if not venda:
                 venda = sum(float(it.get("unit_price") or 0) * float(it.get("quantity") or 0)
@@ -1473,8 +1475,9 @@ def resultado(request: Request, de: str = "", ate: str = ""):
     corpo = (
         "<h1>Resultado</h1>"
         f"<p class='muted'>Periodo {_data_br(de)} a {_data_br(ate)} &middot; "
-        f"Custo {cfg['custo_pct']:g}% &middot; Imposto {cfg['imposto_pct']:g}% &middot; "
-        f"Frete {_moeda(cfg['frete'])}/pedido &middot; <a href='/resultado/config'>ajustar</a></p>"
+        f"<b>{n_pedidos}</b> pedidos &middot; Custo {cfg['custo_pct']:g}% &middot; "
+        f"Imposto {cfg['imposto_pct']:g}% &middot; Frete {_moeda(cfg['frete'])}/pedido &middot; "
+        "<a href='/resultado/config'>ajustar</a></p>"
         f"{form_periodo}{aviso}{cards}"
         "<div style='overflow-x:auto'><table style='min-width:760px'>"
         "<tr><th>Data</th><th>Pedido</th><th>Produto</th><th>Venda</th><th>Comissao</th>"
