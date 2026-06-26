@@ -398,22 +398,38 @@ def responder_pergunta(question_id: str, texto: str,
 # Produtos (anuncios do vendedor)
 # --------------------------------------------------------------------------- #
 def _todos_item_ids(uid: str, token: dict | None) -> list[str]:
-    """IDs de todos os anuncios da conta, paginando via 'scan' (sem teto de 1000)."""
-    ids: list[str] = []
+    """IDs de todos os anuncios da conta. Usa offset (rapido e confiavel, ate
+    1000 anuncios) e cai para 'scan' so quando houver mais de 1000."""
+    primeiro = get(f"/users/{uid}/items/search", {"limit": 50, "offset": 0},
+                   user_id=uid, token=token)
+    total = int((primeiro.get("paging") or {}).get("total") or 0)
+    ids: list[str] = list(primeiro.get("results") or [])
+
+    if total <= 1000:
+        offset = 50
+        while offset < total:
+            dados = get(f"/users/{uid}/items/search", {"limit": 50, "offset": offset},
+                        user_id=uid, token=token)
+            res = dados.get("results") or []
+            if not res:
+                break
+            ids.extend(res)
+            offset += 50
+        return ids
+
+    # mais de 1000 anuncios: paginacao 'scan' (sem o teto de offset do ML)
+    ids = []
     scroll: str | None = None
-    for _ in range(300):  # teto de seguranca: 300 x 100 = 30 mil anuncios
+    for _ in range(400):  # teto de seguranca: 400 x 100 = 40 mil anuncios
         params = {"search_type": "scan", "limit": 100}
         if scroll:
             params["scroll_id"] = scroll
-        try:
-            dados = get(f"/users/{uid}/items/search", params, user_id=uid, token=token)
-        except httpx.HTTPStatusError:
-            break
+        dados = get(f"/users/{uid}/items/search", params, user_id=uid, token=token)
         res = dados.get("results") or []
+        scroll = dados.get("scroll_id")
         if not res:
             break
         ids.extend(res)
-        scroll = dados.get("scroll_id")
         if not scroll:
             break
     return ids

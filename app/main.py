@@ -1932,3 +1932,55 @@ async def produtos_salvar(request: Request):
     return RedirectResponse("/produtos", status_code=303)
 
 
+@app.get("/produtos/diag", response_class=HTMLResponse)
+def produtos_diag(request: Request):
+    """Diagnostico temporario: mostra o que a API do ML responde ao listar itens."""
+    nome, papel = _atual(request)
+    if papel != "admin":
+        return RedirectResponse("/inbox")
+    out: list[str] = []
+    for acc in mercadolivre.contas():
+        uid = str(acc["user_id"])
+        out.append(f"=== conta {uid} ({mercadolivre.nome_exibicao(acc)}) ===")
+        ids: list[str] = []
+        # 1) busca por offset
+        try:
+            d = mercadolivre.get(f"/users/{uid}/items/search", {"limit": 5, "offset": 0},
+                                 user_id=uid, token=acc)
+            total = (d.get("paging") or {}).get("total")
+            ids = d.get("results") or []
+            out.append(f"[offset] OK  paging.total={total}  results={len(ids)}  amostra={ids[:3]}")
+        except httpx.HTTPStatusError as e:
+            out.append(f"[offset] ERRO HTTP {e.response.status_code}: {e.response.text[:500]}")
+        except Exception as e:
+            out.append(f"[offset] EXC {type(e).__name__}: {e}")
+        # 2) busca por scan
+        try:
+            d = mercadolivre.get(f"/users/{uid}/items/search",
+                                 {"search_type": "scan", "limit": 5}, user_id=uid, token=acc)
+            out.append(f"[scan]   OK  scroll_id={'sim' if d.get('scroll_id') else 'nao'}  "
+                       f"results={len(d.get('results') or [])}")
+        except httpx.HTTPStatusError as e:
+            out.append(f"[scan]   ERRO HTTP {e.response.status_code}: {e.response.text[:500]}")
+        except Exception as e:
+            out.append(f"[scan]   EXC {type(e).__name__}: {e}")
+        # 3) detalhes (multiget) dos primeiros ids achados
+        if ids:
+            try:
+                d = mercadolivre.get("/items", {"ids": ",".join(ids[:3]),
+                                                "attributes": "id,title,price,status"},
+                                     user_id=uid, token=acc)
+                amost = [(x.get("code"), (x.get("body") or {}).get("title"))
+                         for x in (d if isinstance(d, list) else [])]
+                out.append(f"[detalhes] {amost}")
+            except Exception as e:
+                out.append(f"[detalhes] EXC {type(e).__name__}: {e}")
+        out.append("")
+    inner = "\n".join(out).replace("<", "&lt;")
+    corpo = ("<h1>Diagnostico de produtos</h1>"
+             "<p class='muted'>Pagina temporaria. Me mande o que aparece aqui.</p>"
+             f"<pre style='white-space:pre-wrap;font-size:12px;background:#fff;"
+             f"border:1px solid #e6e8eb;border-radius:10px;padding:14px'>{inner}</pre>")
+    return _pagina(corpo, ativo="produtos", papel=papel, nome=nome)
+
+
