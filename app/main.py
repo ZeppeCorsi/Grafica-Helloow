@@ -5,6 +5,7 @@ Rodar:
 Depois abra http://localhost:8000 no navegador.
 """
 import secrets
+from datetime import date
 
 import httpx
 from pathlib import Path
@@ -1399,18 +1400,21 @@ def resultado_config_salvar(request: Request, custo_pct: str = Form("20"),
 
 
 @app.get("/resultado", response_class=HTMLResponse)
-def resultado(request: Request):
+def resultado(request: Request, de: str = "", ate: str = ""):
     nome, papel = _atual(request)
     if papel != "admin":
         return RedirectResponse("/inbox")
     cfg = _preco_cfg()
+    hoje = date.today()
+    de = de or hoje.replace(day=1).isoformat()
+    ate = ate or hoje.isoformat()
 
     linhas = ""
     t_venda = t_com = t_frete = t_custo = t_imp = t_liq = 0.0
     for acc in mercadolivre.contas():
         uid = str(acc["user_id"])
         try:
-            pedidos = mercadolivre.listar_pedidos(limite=15, user_id=uid, token=acc)
+            pedidos = mercadolivre.pedidos_periodo(de, ate, user_id=uid, token=acc)
         except (RuntimeError, httpx.HTTPStatusError):
             pedidos = []
         for o in pedidos:
@@ -1452,11 +1456,23 @@ def resultado(request: Request):
              "<div class='card' style='background:#FFF7E6;border-color:#FAD89B'>"
              "Voce ainda nao configurou os percentuais &mdash; usando custo 20% e imposto 6% de exemplo. "
              "<a href='/resultado/config'>Configurar agora</a></div>")
+    form_periodo = (
+        "<form method='get' action='/resultado' "
+        "style='display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin:6px 0 16px'>"
+        "<div><div class='muted' style='font-size:12px'>De</div>"
+        f"<input type='date' name='de' value='{de}' "
+        "style='padding:8px;border:1px solid #d7dade;border-radius:8px'/></div>"
+        "<div><div class='muted' style='font-size:12px'>Ate</div>"
+        f"<input type='date' name='ate' value='{ate}' "
+        "style='padding:8px;border:1px solid #d7dade;border-radius:8px'/></div>"
+        "<button class='btn'>Filtrar</button></form>"
+    )
     corpo = (
-        "<h1>Resultado <span class='muted' style='font-size:14px'>(amostra dos pedidos recentes)</span></h1>"
-        f"<p class='muted'>Custo {cfg['custo_pct']:g}% &middot; Imposto {cfg['imposto_pct']:g}% &middot; "
+        "<h1>Resultado</h1>"
+        f"<p class='muted'>Periodo {_data_br(de)} a {_data_br(ate)} &middot; "
+        f"Custo {cfg['custo_pct']:g}% &middot; Imposto {cfg['imposto_pct']:g}% &middot; "
         f"Frete {_moeda(cfg['frete'])}/pedido &middot; <a href='/resultado/config'>ajustar</a></p>"
-        f"{aviso}{cards}"
+        f"{form_periodo}{aviso}{cards}"
         "<table><tr><th>Data</th><th>Pedido</th><th>Produto</th><th>Venda</th>"
         "<th>Comissao</th><th>Custo</th><th>Imposto</th><th>Liquido</th><th>Margem</th></tr>"
         f"{linhas}</table>"
@@ -1464,3 +1480,29 @@ def resultado(request: Request):
         "Custo e imposto = % configurados. Frete = valor medio configurado.</p>"
     )
     return _pagina(corpo, ativo="resultado", papel=papel, nome=nome)
+
+
+@app.get("/resultado/diag", response_class=HTMLResponse)
+def resultado_diag(request: Request):
+    """Diagnostico: JSON cru de um pedido (para achar frete e valor a receber)."""
+    if _atual(request)[1] != "admin":
+        return RedirectResponse("/inbox")
+    import json as _json
+    out = "<h1>Diagnostico - 1 pedido</h1>"
+    for acc in mercadolivre.contas():
+        uid = str(acc["user_id"])
+        try:
+            pedidos = mercadolivre.listar_pedidos(limite=1, user_id=uid, token=acc)
+        except Exception as e:
+            out += f"<p>conta {uid}: erro {e}</p>"
+            continue
+        if not pedidos:
+            continue
+        o = pedidos[0]
+        det = mercadolivre.obter_pedido(str(o.get("id")), token=acc) or o
+        out += (f"<h3>conta {uid} &middot; pedido {o.get('id')}</h3>"
+                "<pre style='background:#f4f5f7;padding:12px;border-radius:8px;"
+                "white-space:pre-wrap;font-size:11px;max-height:520px;overflow:auto'>"
+                f"{_json.dumps(det, indent=2, ensure_ascii=False)[:6000]}</pre>")
+        break  # so um pedido ja basta
+    return _pagina(out, ativo="resultado")

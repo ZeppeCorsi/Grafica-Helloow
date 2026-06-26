@@ -26,6 +26,8 @@ _TTL_PERG = 25
 _cache_perg: dict = {}     # (uid, status) -> (timestamp, perguntas)
 _TTL_ITEM = 600
 _cache_item: dict = {}     # item_id -> (timestamp, titulo)
+_TTL_PERIODO = 300
+_cache_periodo: dict = {}  # (uid, de, ate) -> (timestamp, pedidos)
 _migrado = False           # a migracao do token legado roda so 1x por processo
 
 
@@ -244,6 +246,33 @@ def listar_pedidos(limite: int = 15, user_id: str | None = None,
     resultados = dados.get("results", [])
     _cache_pedidos[chave] = (agora, resultados)
     return resultados
+
+
+def pedidos_periodo(de: str, ate: str, user_id: str | None = None,
+                    token: dict | None = None, max_paginas: int = 12) -> list[dict]:
+    """Todos os pedidos de uma conta entre as datas de/ate (YYYY-MM-DD)."""
+    uid = str(user_id) if user_id else _primeiro_uid()
+    chave = (uid, de, ate)
+    agora = time.time()
+    cache = _cache_periodo.get(chave)
+    if cache and agora - cache[0] < _TTL_PERIODO:
+        return cache[1]
+    todos: list[dict] = []
+    offset = 0
+    while offset < max_paginas * 50:
+        params = {
+            "seller": uid, "sort": "date_desc", "limit": 50, "offset": offset,
+            "order.date_created.from": f"{de}T00:00:00.000-00:00",
+            "order.date_created.to": f"{ate}T23:59:59.999-00:00",
+        }
+        dados = get("/orders/search", params, user_id=uid, token=token)
+        res = dados.get("results", [])
+        todos.extend(res)
+        if len(res) < 50:
+            break
+        offset += 50
+    _cache_periodo[chave] = (agora, todos)
+    return todos
 
 
 def obter_pedido(order_id: str, user_id: str | None = None,
