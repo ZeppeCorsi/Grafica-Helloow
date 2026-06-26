@@ -1443,8 +1443,8 @@ def _calc_resultado(de: str, ate: str, cfg: dict):
             t["arec"] += a_receber; t["custo"] += custo; t["imp"] += imposto
             t["liq"] += liquido
             cor = "#0F6E56" if liquido >= 0 else "#A32D2D"
-            produtos = o.get("order_items") or []
-            titulo = (produtos[0].get("item") or {}).get("title", "-") if produtos else "-"
+            itens_ped = o.get("order_items") or []
+            titulo = (itens_ped[0].get("item") or {}).get("title", "-") if itens_ped else "-"
             linhas += (
                 f"<tr><td>{_data_br(o.get('date_created'))}</td><td>{o.get('id','-')}</td>"
                 f"<td>{titulo[:32]}</td><td>{_moeda(venda)}</td><td>{_moeda(comissao)}</td>"
