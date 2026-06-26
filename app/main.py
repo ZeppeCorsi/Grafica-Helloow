@@ -1942,6 +1942,7 @@ def produtos_diag(request: Request):
     for acc in mercadolivre.contas():
         uid = str(acc["user_id"])
         out.append(f"=== conta {uid} ({mercadolivre.nome_exibicao(acc)}) ===")
+        out.append(f"token scope = {acc.get('scope')!r}")
         ids: list[str] = []
         # 1) busca por offset
         try:
