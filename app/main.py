@@ -13,7 +13,7 @@ from fastapi import FastAPI, Form, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import bling, categorias, config, mercadolivre, usuarios
+from . import bling, categorias, config, mercadolivre, store, usuarios
 
 app = FastAPI(title="Hub de atendimento")
 
@@ -180,7 +180,9 @@ def _pagina(corpo: str, full: bool = False, ativo: str = "",
         return f"<a href='{href}' class='{'on' if ativo == key else ''}'>{label}</a>"
     admin_links = ""
     if papel == "admin":
-        admin_links = lk("/usuarios", "Equipe", "usuarios") + lk("/desempenho", "Desempenho", "desempenho")
+        admin_links = (lk("/resultado", "Resultado", "resultado")
+                       + lk("/usuarios", "Equipe", "usuarios")
+                       + lk("/desempenho", "Desempenho", "desempenho"))
     user_chip = (f"<span class='muted' style='font-size:12px;margin-right:4px'>"
                  f"<i class='ti ti-user'></i> {nome}</span>" if nome else "")
     nav = (
@@ -271,11 +273,20 @@ footer{border-top:1px solid #eef0f2;padding:26px 0;color:#8a93a0;font-size:13px;
 
 <div class="hero"><div class="wrap">
   <h1>Todos os seus marketplaces, <span>uma conversa só</span>.</h1>
-  <p>O Zappe Hub reune as mensagens e perguntas do Mercado Livre num so lugar &mdash; com categorias, equipe e relatorios. Atenda mais rapido, sem trocar de aba.</p>
+  <p>Pre-venda e pos-venda do Mercado Livre num so lugar: responda as <b>perguntas do anuncio</b> e as <b>mensagens do cliente</b> apos a compra &mdash; com categorias, equipe e relatorios. Atenda mais rapido, sem trocar de aba.</p>
   <a class="btn" href="/entrar">Comecar agora</a>
 </div></div>
 
 <section><div class="wrap">
+  <h2>Pre-venda e pos-venda, num so lugar</h2>
+  <p class="sub">Todo o ciclo do atendimento no marketplace, integrado.</p>
+  <div class="grid" style="grid-template-columns:1fr 1fr">
+    <div class="feat"><div class="ic"><i class="ti ti-help-circle"></i></div><h3>Pre-venda &mdash; Perguntas do anuncio</h3><p>Responda as duvidas de quem ainda <b>nao comprou</b>, direto das perguntas do anuncio. Resposta rapida = mais vendas.</p></div>
+    <div class="feat"><div class="ic"><i class="ti ti-messages"></i></div><h3>Pos-venda &mdash; Contato com o cliente</h3><p>Mensagens <b>apos a compra</b>: duvidas, a arte enviada pelo cliente e o status do pedido. Tudo organizado por loja e categoria.</p></div>
+  </div>
+</div></section>
+
+<section style="background:#f6f7f9"><div class="wrap">
   <h2>Tudo o que o seu atendimento precisa</h2>
   <p class="sub">Pos-venda e pre-venda, varias contas, organizado e com a sua equipe.</p>
   <div class="grid">
@@ -288,9 +299,10 @@ footer{border-top:1px solid #eef0f2;padding:26px 0;color:#8a93a0;font-size:13px;
   </div>
 </div></section>
 
-<section style="background:#f6f7f9"><div class="wrap">
+<section><div class="wrap">
   <h2>Planos para cada tamanho de equipe</h2>
   <p class="sub">Escolha pelo numero de atendentes. Comece pequeno e cresca quando precisar.</p>
+  <div style="text-align:center;margin:-12px 0 26px"><span style="background:#FFF1CC;color:#854F0B;font-size:14px;font-weight:600;padding:8px 18px;border-radius:999px;display:inline-flex;align-items:center;gap:8px"><i class="ti ti-rocket"></i> Precos especiais de lancamento &mdash; somente neste mes</span></div>
   <div class="planos">
     <div class="plano"><div class="nm">Essencial</div><div class="at">ate 3 atendentes</div><div class="pr">R$ 199<small>/mes</small></div></div>
     <div class="plano top"><div class="tag">Mais popular</div><div class="nm">Profissional</div><div class="at">ate 10 atendentes</div><div class="pr">R$ 299<small>/mes</small></div></div>
@@ -1317,3 +1329,138 @@ def desempenho(request: Request):
         f"{linhas}</table>"
     )
     return _pagina(corpo, ativo="desempenho", papel=papel, nome=nome)
+
+
+# =========================================================================== #
+# Resultado / Precificacao (valor liquido por pedido) - admin
+# =========================================================================== #
+def _num(s, padrao=0.0):
+    try:
+        return float(str(s).replace(",", ".").strip())
+    except Exception:
+        return padrao
+
+
+def _moeda(v):
+    return "R$ " + f"{v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def _preco_cfg():
+    c = store.carregar("preco_config") or {}
+    return {
+        "custo_pct": float(c.get("custo_pct", 20)),
+        "imposto_pct": float(c.get("imposto_pct", 6)),
+        "frete": float(c.get("frete", 0)),
+        "definido": bool(c),
+    }
+
+
+@app.get("/resultado/config", response_class=HTMLResponse)
+def resultado_config(request: Request):
+    nome, papel = _atual(request)
+    if papel != "admin":
+        return RedirectResponse("/inbox")
+    cfg = _preco_cfg()
+    corpo = (
+        "<h1>Configuracao de precificacao</h1>"
+        "<p class='muted'>Preencha para calcular o valor liquido dos pedidos.</p>"
+        "<div class='card' style='max-width:480px'>"
+        "<form method='post' action='/resultado/config' style='display:grid;gap:16px'>"
+        "<div><label style='font-size:13px;color:#5b6573'>% de custo medio sobre a venda</label>"
+        f"<input name='custo_pct' value='{cfg['custo_pct']:g}' "
+        "style='width:100%;padding:9px;border:1px solid #d7dade;border-radius:8px'/>"
+        "<div class='muted' style='font-size:11px'>Ex: 20 = o produto custa 20% do valor da venda. "
+        "(Quando tiver o custo no Bling, da para puxar o real.)</div></div>"
+        "<div><label style='font-size:13px;color:#5b6573'>% de imposto sobre a venda</label>"
+        f"<input name='imposto_pct' value='{cfg['imposto_pct']:g}' "
+        "style='width:100%;padding:9px;border:1px solid #d7dade;border-radius:8px'/>"
+        "<div class='muted' style='font-size:11px'>Ex: Simples Nacional ~6%.</div></div>"
+        "<div><label style='font-size:13px;color:#5b6573'>Frete medio por pedido (R$)</label>"
+        f"<input name='frete' value='{cfg['frete']:g}' "
+        "style='width:100%;padding:9px;border:1px solid #d7dade;border-radius:8px'/>"
+        "<div class='muted' style='font-size:11px'>Quanto voce paga de frete, em media. 0 se o cliente paga.</div></div>"
+        "<button class='btn'>Salvar</button></form></div>"
+        "<p style='margin-top:14px'><a href='/resultado'>&larr; ver o resultado</a></p>"
+    )
+    return _pagina(corpo, ativo="resultado", papel=papel, nome=nome)
+
+
+@app.post("/resultado/config")
+def resultado_config_salvar(request: Request, custo_pct: str = Form("20"),
+                            imposto_pct: str = Form("6"), frete: str = Form("0")):
+    if _atual(request)[1] != "admin":
+        return RedirectResponse("/inbox")
+    store.salvar("preco_config", {
+        "custo_pct": _num(custo_pct, 20),
+        "imposto_pct": _num(imposto_pct, 6),
+        "frete": _num(frete, 0),
+    })
+    return RedirectResponse("/resultado", status_code=303)
+
+
+@app.get("/resultado", response_class=HTMLResponse)
+def resultado(request: Request):
+    nome, papel = _atual(request)
+    if papel != "admin":
+        return RedirectResponse("/inbox")
+    cfg = _preco_cfg()
+
+    linhas = ""
+    t_venda = t_com = t_frete = t_custo = t_imp = t_liq = 0.0
+    for acc in mercadolivre.contas():
+        uid = str(acc["user_id"])
+        try:
+            pedidos = mercadolivre.listar_pedidos(limite=15, user_id=uid, token=acc)
+        except (RuntimeError, httpx.HTTPStatusError):
+            pedidos = []
+        for o in pedidos:
+            venda = float(o.get("total_amount") or 0)
+            if not venda:
+                venda = sum(float(it.get("unit_price") or 0) * float(it.get("quantity") or 0)
+                            for it in (o.get("order_items") or []))
+            comissao = sum(float(it.get("sale_fee") or 0) for it in (o.get("order_items") or []))
+            custo = venda * cfg["custo_pct"] / 100
+            imposto = venda * cfg["imposto_pct"] / 100
+            frete = cfg["frete"]
+            liquido = venda - comissao - frete - custo - imposto
+            margem = (liquido / venda * 100) if venda else 0
+            t_venda += venda; t_com += comissao; t_frete += frete
+            t_custo += custo; t_imp += imposto; t_liq += liquido
+            cor = "#0F6E56" if liquido >= 0 else "#A32D2D"
+            produtos = o.get("order_items") or []
+            titulo = (produtos[0].get("item") or {}).get("title", "-") if produtos else "-"
+            linhas += (
+                f"<tr><td>{_data_br(o.get('date_created'))}</td><td>{o.get('id','-')}</td>"
+                f"<td>{titulo[:34]}</td><td>{_moeda(venda)}</td><td>{_moeda(comissao)}</td>"
+                f"<td>{_moeda(custo)}</td><td>{_moeda(imposto)}</td>"
+                f"<td style='color:{cor};font-weight:500'>{_moeda(liquido)}</td>"
+                f"<td style='color:{cor}'>{margem:.0f}%</td></tr>"
+            )
+    if not linhas:
+        linhas = "<tr><td colspan='9' class='muted'>Sem pedidos recentes.</td></tr>"
+
+    margem_media = (t_liq / t_venda * 100) if t_venda else 0
+    cards = (
+        "<div style='display:flex;gap:12px;flex-wrap:wrap;margin:12px 0 22px'>"
+        f"<div style='background:#f4f5f7;border-radius:10px;padding:12px 18px'><div class='muted' style='font-size:12px'>Faturamento</div><div style='font-size:20px;font-weight:600'>{_moeda(t_venda)}</div></div>"
+        f"<div style='background:#f4f5f7;border-radius:10px;padding:12px 18px'><div class='muted' style='font-size:12px'>Custos + taxas</div><div style='font-size:20px;font-weight:600'>{_moeda(t_com + t_frete + t_custo + t_imp)}</div></div>"
+        f"<div style='background:#EEEDFE;border-radius:10px;padding:12px 18px'><div class='muted' style='font-size:12px'>Lucro liquido</div><div style='font-size:20px;font-weight:700;color:#3C3489'>{_moeda(t_liq)}</div></div>"
+        f"<div style='background:#f4f5f7;border-radius:10px;padding:12px 18px'><div class='muted' style='font-size:12px'>Margem media</div><div style='font-size:20px;font-weight:600'>{margem_media:.0f}%</div></div>"
+        "</div>"
+    )
+    aviso = ("" if cfg["definido"] else
+             "<div class='card' style='background:#FFF7E6;border-color:#FAD89B'>"
+             "Voce ainda nao configurou os percentuais &mdash; usando custo 20% e imposto 6% de exemplo. "
+             "<a href='/resultado/config'>Configurar agora</a></div>")
+    corpo = (
+        "<h1>Resultado <span class='muted' style='font-size:14px'>(amostra dos pedidos recentes)</span></h1>"
+        f"<p class='muted'>Custo {cfg['custo_pct']:g}% &middot; Imposto {cfg['imposto_pct']:g}% &middot; "
+        f"Frete {_moeda(cfg['frete'])}/pedido &middot; <a href='/resultado/config'>ajustar</a></p>"
+        f"{aviso}{cards}"
+        "<table><tr><th>Data</th><th>Pedido</th><th>Produto</th><th>Venda</th>"
+        "<th>Comissao</th><th>Custo</th><th>Imposto</th><th>Liquido</th><th>Margem</th></tr>"
+        f"{linhas}</table>"
+        "<p class='muted' style='margin-top:12px;font-size:12px'>Comissao = real do Mercado Livre. "
+        "Custo e imposto = % configurados. Frete = valor medio configurado.</p>"
+    )
+    return _pagina(corpo, ativo="resultado", papel=papel, nome=nome)
