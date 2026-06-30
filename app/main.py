@@ -2054,22 +2054,27 @@ def vendas(request: Request, de: str = "", ate: str = "", loja: str = "",
                 "title='Mensagem nao respondida'></i> " if pk in aguardando else "")
         link_msg = f"/inbox?pack={pk}&buyer={comp_id}&conta={uid}"
         linhas += (
-            "<tr>"
-            f"<td>{_data_br(o.get('date_created'))}</td>"
-            f"<td>{o.get('id', '-')}</td>"
-            f"<td><span class='badge' style='background:#FFF7CC;color:#7a6a00'>"
-            f"{apel.get(uid, uid)}</span></td>"
-            f"<td>{sino}{comprador}</td>"
-            f"<td>{titulo[:42]}</td>"
-            f"<td>{_moeda(venda)}</td>"
-            f"<td>{_badge_status(o.get('status'))}</td>"
-            f"<td style='text-align:right'><a class='btn ghost' href='{link_msg}' "
-            "style='padding:5px 11px;font-size:12.5px'>"
-            "<i class='ti ti-message'></i> Mensagens</a></td>"
-            "</tr>"
+            f"<a href='{link_msg}' style='display:flex;justify-content:space-between;gap:14px;"
+            "align-items:center;padding:12px 14px;border:1px solid #e6e8eb;border-radius:10px;"
+            "background:#fff;margin-bottom:8px'>"
+            "<div style='min-width:0;flex:1'>"
+            "<div style='font-weight:600;display:flex;align-items:center;gap:6px;flex-wrap:wrap'>"
+            f"{sino}{comprador}"
+            f"<span class='badge' style='background:#FFF7CC;color:#7a6a00'>{apel.get(uid, uid)}</span></div>"
+            "<div class='muted' style='font-size:13px;white-space:nowrap;overflow:hidden;"
+            f"text-overflow:ellipsis;max-width:520px;margin-top:1px'>{titulo}</div>"
+            "<div class='muted' style='font-size:11px;margin-top:2px'>"
+            f"<i class='ti ti-hash' style='font-size:11px'></i> {o.get('id', '-')} &middot; "
+            f"{_data_br(o.get('date_created'))}</div></div>"
+            "<div style='text-align:right;flex:none'>"
+            f"<div style='font-weight:600'>{_moeda(venda)}</div>"
+            f"<div style='margin:5px 0'>{_badge_status(o.get('status'))}</div>"
+            "<div style='color:#534AB7;font-size:12.5px;white-space:nowrap'>"
+            "<i class='ti ti-message'></i> Mensagens &rarr;</div>"
+            "</div></a>"
         )
     if not linhas:
-        linhas = "<tr><td colspan='8' class='muted'>Nenhum pedido no periodo.</td></tr>"
+        linhas = "<div class='muted' style='padding:14px'>Nenhum pedido no periodo.</div>"
 
     # filtros (periodo + loja + busca)
     opts = "<option value=''>Todas as lojas</option>" + "".join(
@@ -2110,14 +2115,11 @@ def vendas(request: Request, de: str = "", ate: str = "", loja: str = "",
         "@tabler/icons-webfont@3.11.0/dist/tabler-icons.min.css'>"
         "<h1 style='margin-bottom:4px'>Pedidos</h1>"
         "<p class='muted'>Direto do Mercado Livre &mdash; sem depender do Bling. "
-        "Clique em <b>Mensagens</b> para ir ao pos-venda do pedido.</p>"
+        "Clique no pedido para abrir o pos-venda (mensagens) do comprador.</p>"
         f"{filtros}"
         f"<p class='muted' style='font-size:13px'>{total_n} pedido(s) no periodo "
         f"{_data_br(de)} a {_data_br(ate)}.</p>"
-        "<div style='overflow-x:auto'><table style='min-width:720px'>"
-        "<tr><th>Data</th><th>Pedido</th><th>Loja</th><th>Comprador</th><th>Produto</th>"
-        "<th>Valor</th><th>Status</th><th></th></tr>"
-        f"{linhas}</table></div>{nav}"
+        f"<div>{linhas}</div>{nav}"
     )
     return _pagina(corpo, ativo="vendas", papel=papel, nome=nome)
 
