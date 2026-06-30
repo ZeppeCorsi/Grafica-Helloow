@@ -6,7 +6,7 @@ Depois abra http://localhost:8000 no navegador.
 """
 import calendar
 import secrets
-from datetime import date
+from datetime import date, timedelta
 
 import httpx
 from pathlib import Path
@@ -196,6 +196,7 @@ def _pagina(corpo: str, full: bool = False, ativo: str = "",
         "<div class='links' style='display:flex;align-items:center'>"
         + lk("/inbox", "Caixa de entrada", "inbox")
         + lk("/perguntas", "Perguntas", "perguntas")
+        + lk("/vendas", "Pedidos", "vendas")
         + lk("/pedidos", "Pedidos (Bling)", "pedidos")
         + admin_links
         + user_chip
@@ -1983,5 +1984,141 @@ def produtos_diag(request: Request):
              f"<pre style='white-space:pre-wrap;font-size:12px;background:#fff;"
              f"border:1px solid #e6e8eb;border-radius:10px;padding:14px'>{inner}</pre>")
     return _pagina(corpo, ativo="produtos", papel=papel, nome=nome)
+
+
+# --------------------------------------------------------------------------- #
+# Pedidos (direto do Mercado Livre, sem depender do Bling) + botao p/ mensagens
+# --------------------------------------------------------------------------- #
+@app.get("/vendas", response_class=HTMLResponse)
+def vendas(request: Request, de: str = "", ate: str = "", loja: str = "",
+           q: str = "", pag: int = 1):
+    nome, papel = _atual(request)
+    contas = mercadolivre.contas()
+    if not contas:
+        corpo = ("<h1>Pedidos</h1><div class='card'>Nenhuma conta do Mercado Livre "
+                 "conectada ainda. <a href='/ml/login'>Conectar conta</a></div>")
+        return _pagina(corpo, ativo="vendas", papel=papel, nome=nome)
+
+    hoje = date.today()
+    de = de or (hoje - timedelta(days=30)).isoformat()
+    ate = ate or hoje.isoformat()
+    termo = q.strip().lower()
+
+    # junta os pedidos de todas as contas (ou da loja filtrada)
+    registros: list[tuple] = []
+    for acc in contas:
+        uid = str(acc["user_id"])
+        if loja and loja != uid:
+            continue
+        try:
+            pedidos = mercadolivre.pedidos_periodo(de, ate, user_id=uid, token=acc)
+        except (RuntimeError, httpx.HTTPError):
+            pedidos = []
+        try:
+            aguardando = mercadolivre.packs_aguardando(uid, acc)
+        except (RuntimeError, httpx.HTTPError):
+            aguardando = set()
+        for o in pedidos:
+            registros.append((o, uid, aguardando))
+
+    if termo:
+        def _bate(reg):
+            o = reg[0]
+            cod = str(o.get("id") or "")
+            comp = ((o.get("buyer") or {}).get("nickname") or "").lower()
+            its = o.get("order_items") or []
+            tit = ((its[0].get("item") or {}).get("title") or "").lower() if its else ""
+            return termo in cod or termo in comp or termo in tit
+        registros = [r for r in registros if _bate(r)]
+
+    registros.sort(key=lambda r: str(r[0].get("date_created") or ""), reverse=True)
+
+    total_n = len(registros)
+    por_pag = 25
+    pag = max(1, pag)
+    ini = (pag - 1) * por_pag
+    pagina_itens = registros[ini:ini + por_pag]
+    tem_mais = ini + por_pag < total_n
+
+    apel = {str(a["user_id"]): mercadolivre.nome_exibicao(a) for a in contas}
+
+    linhas = ""
+    for o, uid, aguardando in pagina_itens:
+        pk = str(o.get("pack_id") or o.get("id"))
+        comprador = (o.get("buyer") or {}).get("nickname", "-")
+        comp_id = str((o.get("buyer") or {}).get("id", ""))
+        its = o.get("order_items") or []
+        titulo = (its[0].get("item") or {}).get("title", "-") if its else "-"
+        venda = float(o.get("total_amount") or 0)
+        sino = ("<i class='ti ti-bell' style='color:#C77700' "
+                "title='Mensagem nao respondida'></i> " if pk in aguardando else "")
+        link_msg = f"/inbox?pack={pk}&buyer={comp_id}&conta={uid}"
+        linhas += (
+            "<tr>"
+            f"<td>{_data_br(o.get('date_created'))}</td>"
+            f"<td>{o.get('id', '-')}</td>"
+            f"<td><span class='badge' style='background:#FFF7CC;color:#7a6a00'>"
+            f"{apel.get(uid, uid)}</span></td>"
+            f"<td>{sino}{comprador}</td>"
+            f"<td>{titulo[:42]}</td>"
+            f"<td>{_moeda(venda)}</td>"
+            f"<td>{_badge_status(o.get('status'))}</td>"
+            f"<td style='text-align:right'><a class='btn ghost' href='{link_msg}' "
+            "style='padding:5px 11px;font-size:12.5px'>"
+            "<i class='ti ti-message'></i> Mensagens</a></td>"
+            "</tr>"
+        )
+    if not linhas:
+        linhas = "<tr><td colspan='8' class='muted'>Nenhum pedido no periodo.</td></tr>"
+
+    # filtros (periodo + loja + busca)
+    opts = "<option value=''>Todas as lojas</option>" + "".join(
+        f"<option value='{a['user_id']}' {'selected' if loja == str(a['user_id']) else ''}>"
+        f"{mercadolivre.nome_exibicao(a)}</option>" for a in contas)
+    filtros = (
+        "<form method='get' action='/vendas' "
+        "style='display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin:6px 0 16px'>"
+        "<div><div class='muted' style='font-size:12px'>De</div>"
+        f"<input type='date' name='de' value='{de}' "
+        "style='padding:8px;border:1px solid #d7dade;border-radius:8px'/></div>"
+        "<div><div class='muted' style='font-size:12px'>Ate</div>"
+        f"<input type='date' name='ate' value='{ate}' "
+        "style='padding:8px;border:1px solid #d7dade;border-radius:8px'/></div>"
+        "<div><div class='muted' style='font-size:12px'>Loja</div>"
+        f"<select name='loja' style='padding:9px;border:1px solid #d7dade;border-radius:8px'>{opts}</select></div>"
+        "<div style='flex:1;min-width:180px'><div class='muted' style='font-size:12px'>Busca</div>"
+        f"<input name='q' value='{q}' placeholder='codigo, cliente ou produto' "
+        "style='width:100%;padding:9px;border:1px solid #d7dade;border-radius:8px'/></div>"
+        "<button class='btn'>Filtrar</button></form>"
+    )
+
+    # paginacao (some quando esta buscando)
+    nav = ""
+    if not termo:
+        base = f"/vendas?de={de}&ate={ate}&loja={loja}"
+        partes = []
+        if pag > 1:
+            partes.append(f"<a class='btn ghost' href='{base}&pag={pag - 1}'>&larr; Recentes</a>")
+        partes.append(f"<span class='muted' style='font-size:12px'>Pagina {pag}</span>")
+        if tem_mais:
+            partes.append(f"<a class='btn ghost' href='{base}&pag={pag + 1}'>Mais antigos &rarr;</a>")
+        nav = ("<div style='display:flex;gap:8px;align-items:center;justify-content:center;"
+               "margin-top:14px'>" + "".join(partes) + "</div>")
+
+    corpo = (
+        "<link rel='stylesheet' href='https://cdn.jsdelivr.net/npm/"
+        "@tabler/icons-webfont@3.11.0/dist/tabler-icons.min.css'>"
+        "<h1 style='margin-bottom:4px'>Pedidos</h1>"
+        "<p class='muted'>Direto do Mercado Livre &mdash; sem depender do Bling. "
+        "Clique em <b>Mensagens</b> para ir ao pos-venda do pedido.</p>"
+        f"{filtros}"
+        f"<p class='muted' style='font-size:13px'>{total_n} pedido(s) no periodo "
+        f"{_data_br(de)} a {_data_br(ate)}.</p>"
+        "<div style='overflow-x:auto'><table style='min-width:720px'>"
+        "<tr><th>Data</th><th>Pedido</th><th>Loja</th><th>Comprador</th><th>Produto</th>"
+        "<th>Valor</th><th>Status</th><th></th></tr>"
+        f"{linhas}</table></div>{nav}"
+    )
+    return _pagina(corpo, ativo="vendas", papel=papel, nome=nome)
 
 
