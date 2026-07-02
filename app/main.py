@@ -1903,13 +1903,14 @@ def produtos_page(request: Request, conta: str = "", pend: str = ""):
           "</script>")
 
     corpo = (
-        "<form method='post' action='/produtos/salvar'>"
-        "<div style='display:flex;justify-content:space-between;align-items:center'>"
         "<h1 style='margin-bottom:4px'>Produtos</h1>"
-        "<button class='btn'>Salvar custos</button></div>"
         "<p class='muted'>Preencha o custo de producao de cada anuncio. Ele entra automaticamente "
         "no calculo de margem (Resultado e Financeiro). Quem nao tiver custo usa o % configurado.</p>"
-        f"{resumo}{filtros}{secoes}"
+        # filtros ficam FORA do form de salvar (formulario dentro de formulario quebra o envio)
+        f"{resumo}{filtros}"
+        "<form method='post' action='/produtos/salvar'>"
+        "<div style='text-align:right;margin-bottom:8px'><button class='btn'>Salvar custos</button></div>"
+        f"{secoes}"
         "<div style='margin-top:18px'><button class='btn'>Salvar custos</button></div>"
         "</form>" + js
     )
