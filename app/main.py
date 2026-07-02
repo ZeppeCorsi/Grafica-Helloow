@@ -5,13 +5,14 @@ Rodar:
 Depois abra http://localhost:8000 no navegador.
 """
 import calendar
+import io
 import secrets
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import httpx
 from pathlib import Path
 
-from fastapi import FastAPI, Form, Request
+from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -183,7 +184,8 @@ def _pagina(corpo: str, full: bool = False, ativo: str = "",
         return f"<a href='{href}' class='{'on' if ativo == key else ''}'>{label}</a>"
     admin_links = ""
     if papel == "admin":
-        admin_links = (lk("/produtos", "Produtos", "produtos")
+        admin_links = (lk("/whatsapp", "WhatsApp", "whatsapp")
+                       + lk("/produtos", "Produtos", "produtos")
                        + lk("/resultado", "Resultado", "resultado")
                        + lk("/financeiro", "Financeiro", "financeiro")
                        + lk("/usuarios", "Equipe", "usuarios")
@@ -2123,5 +2125,149 @@ def vendas(request: Request, de: str = "", ate: str = "", loja: str = "",
         f"<div>{linhas}</div>{nav}"
     )
     return _pagina(corpo, ativo="vendas", papel=papel, nome=nome)
+
+
+# --------------------------------------------------------------------------- #
+# Atendimento WhatsApp: base de conhecimento da IA (texto + upload de documento)
+# --------------------------------------------------------------------------- #
+def _esc(s: str) -> str:
+    return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _extrair_texto(nome: str, dados: bytes) -> str:
+    """Extrai texto de um documento enviado (txt/md/csv, pdf ou docx)."""
+    n = (nome or "").lower()
+    try:
+        if n.endswith((".txt", ".md", ".csv")):
+            return dados.decode("utf-8", errors="ignore")
+        if n.endswith(".pdf"):
+            import pypdf
+            leitor = pypdf.PdfReader(io.BytesIO(dados))
+            return "\n".join((p.extract_text() or "") for p in leitor.pages)
+        if n.endswith(".docx"):
+            import docx
+            doc = docx.Document(io.BytesIO(dados))
+            return "\n".join(p.text for p in doc.paragraphs)
+    except Exception:
+        return ""
+    try:
+        return dados.decode("utf-8", errors="ignore")
+    except Exception:
+        return ""
+
+
+def _base_conhecimento() -> dict:
+    b = store.carregar("base_conhecimento") or {}
+    return {"texto": b.get("texto", ""), "atualizado": b.get("atualizado", ""),
+            "origem": b.get("origem", "")}
+
+
+@app.get("/whatsapp", response_class=HTMLResponse)
+def whatsapp_page(request: Request):
+    nome, papel = _atual(request)
+    if papel != "admin":
+        return RedirectResponse("/inbox")
+    base = _base_conhecimento()
+    texto = base["texto"]
+    n_chars = len(texto)
+    ia_ok = config.is_ia_configured()
+
+    ia_badge = ("<span class='badge' style='background:#E1F5EE;color:#0F6E56'>IA conectada</span>"
+                if ia_ok else
+                "<span class='badge' style='background:#FCF1DD;color:#C77700'>IA nao configurada</span>")
+    status = (
+        "<div class='card'>"
+        "<h3 style='margin-top:0'>Status</h3>"
+        "<div style='display:flex;flex-direction:column;gap:10px'>"
+        "<div>&#128241; <b>WhatsApp:</b> <span class='pill'>em breve</span> "
+        "vamos conectar o numero oficial (Meta). Enquanto isso, o assistente ja pode ajudar na "
+        "<a href='/inbox'>Caixa de entrada</a> do Mercado Livre.</div>"
+        f"<div>&#129302; <b>Assistente IA:</b> {ia_badge} "
+        + ("&mdash; tudo pronto para sugerir respostas." if ia_ok else
+           "&mdash; falta a chave da API da Claude (<code>ANTHROPIC_API_KEY</code>) no servidor. "
+           "Crie em console.anthropic.com e me avise que eu te ajudo a colocar.")
+        + "</div></div></div>"
+    )
+
+    atualizado_html = "<span></span>"
+    if base["atualizado"]:
+        d10 = base["atualizado"][:10]
+        data_fmt = f"{d10[8:10]}/{d10[5:7]}/{d10[0:4]}" if len(d10) == 10 else d10
+        origem = f" &middot; de <b>{_esc(base['origem'])}</b>" if base["origem"] else ""
+        atualizado_html = (f"<span class='muted' style='font-size:12px'>Atualizado em "
+                           f"{data_fmt}{origem} &middot; {n_chars} caracteres</span>")
+
+    card_base = (
+        "<div class='card'>"
+        "<h3 style='margin-top:0'>&#128218; Base de conhecimento</h3>"
+        "<p class='muted' style='margin-top:-4px'>A IA responde <b>apenas</b> com base no que "
+        "estiver aqui. Se a pergunta nao estiver na base, ela encaminha para um atendente "
+        "&mdash; assim voce limita o atendimento ao que autorizou.</p>"
+        "<form method='post' action='/whatsapp/upload' enctype='multipart/form-data' "
+        "style='display:flex;gap:8px;align-items:center;flex-wrap:wrap;"
+        "background:#f4f5f7;border-radius:10px;padding:12px;margin-bottom:14px'>"
+        "<i class='ti ti-upload'></i>"
+        "<input type='file' name='arquivo' accept='.pdf,.docx,.txt,.md,.csv' required "
+        "style='flex:1;min-width:220px'/>"
+        "<button class='btn'>Enviar documento</button>"
+        "<span class='muted' style='font-size:11px;flex-basis:100%'>"
+        "PDF, DOCX ou TXT. O texto do arquivo entra na base abaixo (voce pode editar depois de subir).</span>"
+        "</form>"
+        "<form method='post' action='/whatsapp/base'>"
+        "<textarea name='texto' rows='16' style='width:100%;padding:12px;border:1px solid #d7dade;"
+        "border-radius:10px;font-family:inherit;font-size:13.5px;line-height:1.5' "
+        "placeholder='Cole aqui o manual de atendimento: prazos, formas de pagamento, como enviar "
+        "a arte, politica de troca, perguntas frequentes...'>"
+        f"{_esc(texto)}</textarea>"
+        "<div style='display:flex;justify-content:space-between;align-items:center;margin-top:10px'>"
+        f"{atualizado_html}"
+        "<button class='btn'>Salvar base</button></div>"
+        "</form>"
+        "</div>"
+    )
+
+    proximo = (
+        "<div class='card' style='background:#EEEDFE;border-color:#d9d5fb'>"
+        "<h3 style='margin-top:0'>Proximo passo</h3>"
+        "<p style='margin:0'>Com a base preenchida e a chave da IA ligada, eu adiciono o botao "
+        "<b>\"Sugerir resposta\"</b> na conversa: a IA le a base + os dados do pedido e monta um "
+        "rascunho; voce revisa e envia. <b>Nada e enviado sozinho.</b></p></div>"
+    )
+
+    corpo = (
+        "<link rel='stylesheet' href='https://cdn.jsdelivr.net/npm/"
+        "@tabler/icons-webfont@3.11.0/dist/tabler-icons.min.css'>"
+        "<h1>Atendimento WhatsApp</h1>"
+        "<p class='muted'>Monte aqui o \"manual\" que a IA usa para atender. Modo copiloto: "
+        "a IA <b>sugere</b>, o humano revisa e envia.</p>"
+        f"{status}{card_base}{proximo}"
+    )
+    return _pagina(corpo, ativo="whatsapp", papel=papel, nome=nome)
+
+
+@app.post("/whatsapp/base")
+def whatsapp_base_salvar(request: Request, texto: str = Form("")):
+    if _atual(request)[1] != "admin":
+        return RedirectResponse("/inbox")
+    atual = store.carregar("base_conhecimento") or {}
+    store.salvar("base_conhecimento", {
+        "texto": texto, "atualizado": datetime.now().isoformat(),
+        "origem": atual.get("origem", ""),
+    })
+    return RedirectResponse("/whatsapp", status_code=303)
+
+
+@app.post("/whatsapp/upload")
+async def whatsapp_upload(request: Request, arquivo: UploadFile = File(...)):
+    if _atual(request)[1] != "admin":
+        return RedirectResponse("/inbox")
+    dados = await arquivo.read()
+    texto = _extrair_texto(arquivo.filename or "", dados)
+    if texto.strip():
+        store.salvar("base_conhecimento", {
+            "texto": texto, "atualizado": datetime.now().isoformat(),
+            "origem": arquivo.filename or "",
+        })
+    return RedirectResponse("/whatsapp", status_code=303)
 
 

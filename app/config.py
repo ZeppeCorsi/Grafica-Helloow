@@ -51,6 +51,16 @@ def is_ml_configured() -> bool:
 APP_USER = os.getenv("APP_USER", "admin")
 APP_PASSWORD = os.getenv("APP_PASSWORD", "")
 
+# --------------------------------------------------------------------------- #
+# IA (Claude) - usada no assistente de atendimento (sugestao de respostas).
+# Enquanto nao houver chave, o assistente fica desligado (sem custo).
+# --------------------------------------------------------------------------- #
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+
+
+def is_ia_configured() -> bool:
+    return bool(ANTHROPIC_API_KEY)
+
 # Chave para assinar o cookie de sessao. Em producao defina SESSION_SECRET
 # (se nao definir, e gerada uma a cada reinicio -> exige novo login).
 SESSION_SECRET = os.getenv("SESSION_SECRET") or secrets.token_hex(32)
