@@ -37,14 +37,21 @@ if DATABASE_URL:
             return {r[0]: float(r[1]) for r in cur.fetchall()}
 
     def _impl_varios(mapa: dict) -> None:
+        # Em lote: 1 INSERT para os custos preenchidos + 1 DELETE para os vazios,
+        # em vez de uma ida ao banco por produto (evita 500+ viagens EUA<->BR).
+        from psycopg2.extras import execute_values
+        sets = [(item_id, custo) for item_id, custo in mapa.items() if custo is not None]
+        dels = [item_id for item_id, custo in mapa.items() if custo is None]
         with _conn() as c, c.cursor() as cur:
-            for item_id, custo in mapa.items():
-                if custo is None:
-                    cur.execute("DELETE FROM produto_custo WHERE item_id = %s", (item_id,))
-                else:
-                    cur.execute("INSERT INTO produto_custo (item_id, custo) VALUES (%s, %s) "
-                                "ON CONFLICT (item_id) DO UPDATE SET custo = EXCLUDED.custo",
-                                (item_id, custo))
+            if sets:
+                execute_values(
+                    cur,
+                    "INSERT INTO produto_custo (item_id, custo) VALUES %s "
+                    "ON CONFLICT (item_id) DO UPDATE SET custo = EXCLUDED.custo",
+                    sets,
+                )
+            if dels:
+                cur.execute("DELETE FROM produto_custo WHERE item_id = ANY(%s)", (dels,))
             c.commit()
 
 else:

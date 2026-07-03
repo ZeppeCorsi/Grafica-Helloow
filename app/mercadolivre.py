@@ -261,19 +261,28 @@ def pedidos_periodo(de: str, ate: str, user_id: str | None = None,
         return cache[1]
     todos: list[dict] = []
     offset = 0
+    completo = True
     while offset < max_paginas * 50:
         params = {
             "seller": uid, "sort": "date_desc", "limit": 50, "offset": offset,
             "order.date_created.from": f"{de}T00:00:00.000-00:00",
             "order.date_created.to": f"{ate}T23:59:59.999-00:00",
         }
-        dados = get("/orders/search", params, user_id=uid, token=token)
+        try:
+            dados = get("/orders/search", params, user_id=uid, token=token)
+        except httpx.HTTPError:
+            try:  # 1 tentativa extra antes de desistir da pagina (rede EUA<->BR)
+                dados = get("/orders/search", params, user_id=uid, token=token)
+            except httpx.HTTPError:
+                completo = False
+                break
         res = dados.get("results", [])
         todos.extend(res)
         if len(res) < 50:
             break
         offset += 50
-    _cache_periodo[chave] = (agora, todos)
+    if completo:  # so guarda em cache se conseguiu buscar tudo do periodo
+        _cache_periodo[chave] = (agora, todos)
     return todos
 
 
