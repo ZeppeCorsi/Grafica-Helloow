@@ -26,7 +26,7 @@ _TTL_PERG = 25
 _cache_perg: dict = {}     # (uid, status) -> (timestamp, perguntas)
 _TTL_ITEM = 600
 _cache_item: dict = {}     # item_id -> (timestamp, titulo)
-_TTL_PERIODO = 300
+_TTL_PERIODO = 120
 _cache_periodo: dict = {}  # (uid, de, ate) -> (timestamp, pedidos)
 _TTL_PRODUTOS = 300
 _cache_produtos: dict = {}  # uid -> (timestamp, lista de produtos)
@@ -284,6 +284,17 @@ def pedidos_periodo(de: str, ate: str, user_id: str | None = None,
     if completo:  # so guarda em cache se conseguiu buscar tudo do periodo
         _cache_periodo[chave] = (agora, todos)
     return todos
+
+
+def invalidar_periodo(user_id: str | None = None) -> None:
+    """Limpa o cache de pedidos por periodo (botao 'Atualizar agora')."""
+    if user_id:
+        uid = str(user_id)
+        for k in [k for k in _cache_periodo if k[0] == uid]:
+            _cache_periodo.pop(k, None)
+    else:
+        _cache_periodo.clear()
+    _cache_unread.clear()  # tambem re-checa mensagens nao respondidas
 
 
 def obter_pedido(order_id: str, user_id: str | None = None,

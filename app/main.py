@@ -1994,13 +1994,16 @@ def produtos_diag(request: Request):
 # --------------------------------------------------------------------------- #
 @app.get("/vendas", response_class=HTMLResponse)
 def vendas(request: Request, de: str = "", ate: str = "", loja: str = "",
-           q: str = "", pag: int = 1):
+           q: str = "", pag: int = 1, atualizar: str = ""):
     nome, papel = _atual(request)
     contas = mercadolivre.contas()
     if not contas:
         corpo = ("<h1>Pedidos</h1><div class='card'>Nenhuma conta do Mercado Livre "
                  "conectada ainda. <a href='/ml/login'>Conectar conta</a></div>")
         return _pagina(corpo, ativo="vendas", papel=papel, nome=nome)
+
+    if atualizar == "1":  # botao "Atualizar agora": ignora o cache e busca do zero
+        mercadolivre.invalidar_periodo()
 
     hoje = date.today()
     de = de or (hoje - timedelta(days=30)).isoformat()
@@ -2120,8 +2123,13 @@ def vendas(request: Request, de: str = "", ate: str = "", loja: str = "",
         "<p class='muted'>Direto do Mercado Livre &mdash; sem depender do Bling. "
         "Clique no pedido para abrir o pos-venda (mensagens) do comprador.</p>"
         f"{filtros}"
-        f"<p class='muted' style='font-size:13px'>{total_n} pedido(s) no periodo "
-        f"{_data_br(de)} a {_data_br(ate)}.</p>"
+        "<div style='display:flex;justify-content:space-between;align-items:center;"
+        "flex-wrap:wrap;gap:8px;margin-bottom:8px'>"
+        f"<span class='muted' style='font-size:13px'>{total_n} pedido(s) no periodo "
+        f"{_data_br(de)} a {_data_br(ate)}.</span>"
+        f"<a class='btn ghost' href='/vendas?de={de}&ate={ate}&loja={loja}&q={q}&atualizar=1' "
+        "style='padding:6px 12px;font-size:12.5px' title='Buscar pedidos novos agora'>"
+        "<i class='ti ti-refresh'></i> Atualizar agora</a></div>"
         f"<div>{linhas}</div>{nav}"
     )
     return _pagina(corpo, ativo="vendas", papel=papel, nome=nome)
