@@ -2135,6 +2135,67 @@ def vendas(request: Request, de: str = "", ate: str = "", loja: str = "",
     return _pagina(corpo, ativo="vendas", papel=papel, nome=nome)
 
 
+@app.get("/vendas/diag", response_class=HTMLResponse)
+def vendas_diag(request: Request, cod: str = ""):
+    """Diagnostico: dado 1+ codigos, mostra se o pedido existe, data, dono e se
+    aparece na busca por periodo. Ajuda a achar por que um pedido 'nao aparece'."""
+    nome, papel = _atual(request)
+    if papel != "admin":
+        return RedirectResponse("/inbox")
+    contas = mercadolivre.contas()
+    hoje = date.today()
+    de = (hoje - timedelta(days=90)).isoformat()
+    ate = hoje.isoformat()
+    codigos = [c.strip() for c in cod.replace(",", " ").split() if c.strip()]
+    out: list[str] = []
+    for code in codigos:
+        out.append(f"===== codigo {code} =====")
+        achou = False
+        for acc in contas:
+            uid = str(acc["user_id"])
+            loja = mercadolivre.nome_exibicao(acc)
+            try:
+                o = mercadolivre.obter_pedido(code, token=acc)
+            except Exception as e:
+                out.append(f"  [{loja}] erro GET /orders/{code}: {type(e).__name__}")
+                continue
+            if not o:
+                out.append(f"  [{loja}] GET /orders/{code}: nao encontrado (404)")
+                continue
+            achou = True
+            oid = str(o.get("id"))
+            pack = str(o.get("pack_id") or "")
+            dt = str(o.get("date_created") or "")[:19]
+            seller = str((o.get("seller") or {}).get("id") or "")
+            comprador = (o.get("buyer") or {}).get("nickname", "-")
+            out.append(f"  [{loja}] ACHADO  id={oid}  pack_id={pack}  status={o.get('status')}")
+            out.append(f"          data={dt}  seller={seller}  comprador={comprador}")
+            try:
+                pedidos = mercadolivre.pedidos_periodo(de, ate, user_id=uid, token=acc)
+                ids = {str(p.get("id")) for p in pedidos}
+                packs = {str(p.get("pack_id") or "") for p in pedidos}
+                na_lista = oid in ids or (pack and pack in packs) or code in ids
+                out.append(f"          aparece na busca 90d ({len(pedidos)} pedidos)? "
+                           + ("SIM" if na_lista else "NAO"))
+            except Exception as e:
+                out.append(f"          erro ao listar periodo: {type(e).__name__}")
+        if not achou:
+            out.append("  -> nao encontrado em NENHUMA conta conectada.")
+        out.append("")
+    inner = "\n".join(out).replace("<", "&lt;")
+    corpo = (
+        "<h1>Diagnostico de pedidos</h1>"
+        "<p class='muted'>Cole os codigos que nao aparecem (separados por espaco) e clique Verificar.</p>"
+        "<form method='get' action='/vendas/diag' style='display:flex;gap:8px;margin:10px 0'>"
+        f"<input name='cod' value='{cod}' placeholder='2000013781425337 2000013782161365 ...' "
+        "style='flex:1;padding:9px;border:1px solid #d7dade;border-radius:8px'/>"
+        "<button class='btn'>Verificar</button></form>"
+        + (f"<pre style='white-space:pre-wrap;font-size:12px;background:#fff;border:1px solid "
+           f"#e6e8eb;border-radius:10px;padding:14px'>{inner}</pre>" if codigos else "")
+    )
+    return _pagina(corpo, ativo="vendas", papel=papel, nome=nome)
+
+
 # --------------------------------------------------------------------------- #
 # Atendimento WhatsApp: base de conhecimento da IA (texto + upload de documento)
 # --------------------------------------------------------------------------- #
