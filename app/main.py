@@ -2031,10 +2031,11 @@ def vendas(request: Request, de: str = "", ate: str = "", loja: str = "",
         def _bate(reg):
             o = reg[0]
             cod = str(o.get("id") or "")
+            pack = str(o.get("pack_id") or "")  # cliente costuma mandar o codigo do pacote
             comp = ((o.get("buyer") or {}).get("nickname") or "").lower()
             its = o.get("order_items") or []
             tit = ((its[0].get("item") or {}).get("title") or "").lower() if its else ""
-            return termo in cod or termo in comp or termo in tit
+            return termo in cod or termo in pack or termo in comp or termo in tit
         registros = [r for r in registros if _bate(r)]
 
     registros.sort(key=lambda r: str(r[0].get("date_created") or ""), reverse=True)
@@ -2070,8 +2071,11 @@ def vendas(request: Request, de: str = "", ate: str = "", loja: str = "",
             "<div class='muted' style='font-size:13px;white-space:nowrap;overflow:hidden;"
             f"text-overflow:ellipsis;max-width:520px;margin-top:1px'>{titulo}</div>"
             "<div class='muted' style='font-size:11px;margin-top:2px'>"
-            f"<i class='ti ti-hash' style='font-size:11px'></i> {o.get('id', '-')} &middot; "
-            f"{_data_br(o.get('date_created'))}</div></div>"
+            f"<i class='ti ti-hash' style='font-size:11px'></i> {o.get('id', '-')}"
+            + (f" &middot; <b title='Codigo do pacote/carrinho (o que o cliente costuma mandar)'>"
+               f"pacote {o.get('pack_id')}</b>"
+               if o.get("pack_id") and str(o.get("pack_id")) != str(o.get("id")) else "")
+            + f" &middot; {_data_br(o.get('date_created'))}</div></div>"
             "<div style='text-align:right;flex:none'>"
             f"<div style='font-weight:600'>{_moeda(venda)}</div>"
             f"<div style='margin:5px 0'>{_badge_status(o.get('status'))}</div>"
