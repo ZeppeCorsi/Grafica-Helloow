@@ -2160,7 +2160,18 @@ def vendas_diag(request: Request, cod: str = ""):
                 out.append(f"  [{loja}] erro GET /orders/{code}: {type(e).__name__}")
                 continue
             if not o:
-                out.append(f"  [{loja}] GET /orders/{code}: nao encontrado (404)")
+                # nao e pedido nesta conta -> tenta como PACK (carrinho de varios itens)
+                try:
+                    pk = mercadolivre.get(f"/packs/{code}", user_id=uid, token=acc)
+                except Exception:
+                    pk = None
+                if pk and pk.get("id"):
+                    ords = [str(x.get("id")) for x in (pk.get("orders") or [])]
+                    out.append(f"  [{loja}] e um PACK (carrinho). pedidos dentro: {ords}  "
+                               f"status={pk.get('status')}")
+                    achou = True
+                else:
+                    out.append(f"  [{loja}] nao e pedido nem pack desta conta (404)")
                 continue
             achou = True
             oid = str(o.get("id"))
