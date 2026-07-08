@@ -306,6 +306,35 @@ def obter_pedido(order_id: str, user_id: str | None = None,
         return None
 
 
+def dados_envio(order: dict, user_id: str | None = None,
+                token: dict | None = None) -> dict:
+    """Nome + endereco do destinatario (via /shipments) para o pedido impresso.
+    Best-effort: se nao der, retorna {} e a impressao mostra so o comprador."""
+    sid = (order.get("shipping") or {}).get("id")
+    if not sid:
+        return {}
+    try:
+        s = get(f"/shipments/{sid}", user_id=user_id, token=token)
+    except (RuntimeError, httpx.HTTPError):
+        return {}
+    ra = s.get("receiver_address") or {}
+
+    def _nm(x):
+        return x.get("name", "") if isinstance(x, dict) else (x or "")
+
+    return {
+        "nome": ra.get("receiver_name") or "",
+        "telefone": ra.get("receiver_phone") or "",
+        "rua": ra.get("street_name") or "",
+        "numero": ra.get("street_number") or "",
+        "complemento": ra.get("comment") or "",
+        "bairro": _nm(ra.get("neighborhood")),
+        "cidade": _nm(ra.get("city")),
+        "estado": _nm(ra.get("state")),
+        "cep": ra.get("zip_code") or "",
+    }
+
+
 def pedido_do_pack(pack_id: str, user_id: str | None = None,
                    token: dict | None = None) -> dict | None:
     """Se o codigo for de um PACK (carrinho de varios itens), retorna o pedido

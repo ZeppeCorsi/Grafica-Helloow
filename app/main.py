@@ -2192,7 +2192,9 @@ def conversa(request: Request, pack: str = "", conta: str = "", buyer: str = "")
         f"{_badge_status(o.get('status'))}</div>"
         f"<div class='ordbar'><span><i class='ti ti-package'></i> {titulo[:60]}</span>"
         f"<span><i class='ti ti-cash'></i> R$ {total}</span>"
-        f"<span><i class='ti ti-hash'></i> {cod_html}</span></div>"
+        f"<span><i class='ti ti-hash'></i> {cod_html}</span>"
+        f"<a href='/pedido/imprimir?pack={pack}&conta={uid}' target='_blank' "
+        "style='color:#534AB7;font-weight:500'><i class='ti ti-printer'></i> Imprimir pedido</a></div>"
         f"<div class='thread' style='height:auto;max-height:60vh' id='thread'>{baloes}</div>"
         "<form class='reply' method='post' action='/conversa/responder'>"
         f"<input type='hidden' name='pack' value='{pack}'/>"
@@ -2216,6 +2218,122 @@ def conversa_responder(request: Request, pack: str = Form(...), conta: str = For
     except (RuntimeError, httpx.HTTPStatusError):
         pass
     return RedirectResponse(f"/conversa?pack={pack}&conta={conta}&buyer={buyer}", status_code=303)
+
+
+@app.get("/pedido/imprimir", response_class=HTMLResponse)
+def pedido_imprimir(request: Request, pack: str = "", conta: str = ""):
+    """Pagina de impressao do pedido (o navegador salva como PDF)."""
+    contas = mercadolivre.contas()
+    if not contas:
+        return RedirectResponse("/ml/login")
+    acc = next((a for a in contas if str(a["user_id"]) == conta), None) or contas[0]
+    uid = str(acc["user_id"])
+    try:
+        o = mercadolivre.obter_pedido(pack, token=acc) or mercadolivre.pedido_do_pack(pack, token=acc) or {}
+    except (RuntimeError, httpx.HTTPError):
+        o = {}
+    if not o:
+        return HTMLResponse("<p style='font-family:Arial'>Pedido nao encontrado. "
+                            "<a href='/vendas'>Voltar</a></p>")
+    try:
+        env = mercadolivre.dados_envio(o, user_id=uid, token=acc)
+    except Exception:
+        env = {}
+
+    emp = store.carregar("empresa") or {}
+    empresa_nome = emp.get("nome") or mercadolivre.nome_exibicao(acc)
+    empresa_info = "".join(
+        f"<div>{_esc(v)}</div>" for v in
+        [emp.get("endereco", ""), emp.get("cnpj", ""), emp.get("telefone", "")] if v)
+
+    comprador = (o.get("buyer") or {}).get("nickname") or "-"
+    oid = str(o.get("id") or "")
+    pack_id = str(o.get("pack_id") or "")
+    codigo = oid + (f" &middot; pacote {pack_id}" if pack_id and pack_id != oid else "")
+    data = _data_br(o.get("date_created"))
+
+    # bloco do cliente (nome/endereco do envio quando houver)
+    linhas_cli = [f"<b>{_esc(env.get('nome') or comprador)}</b>"]
+    if env.get("rua"):
+        end = f"{env.get('rua','')}, {env.get('numero','')}"
+        if env.get("complemento"):
+            end += f" - {env['complemento']}"
+        linhas_cli.append(_esc(end))
+        linhas_cli.append(_esc(f"{env.get('bairro','')} - {env.get('cidade','')}/"
+                               f"{env.get('estado','')} - CEP {env.get('cep','')}"))
+    if env.get("telefone"):
+        linhas_cli.append(_esc(f"Fone: {env['telefone']}"))
+    cliente_html = "<br>".join(linhas_cli)
+
+    rows = ""
+    n_itens = soma_qtd = 0
+    total_ped = float(o.get("total_amount") or 0)
+    for it in (o.get("order_items") or []):
+        item = it.get("item") or {}
+        desc = item.get("title") or "-"
+        cod = item.get("seller_custom_field") or item.get("id") or "-"
+        qtd = float(it.get("quantity") or 0)
+        unit = float(it.get("unit_price") or 0)
+        n_itens += 1
+        soma_qtd += qtd
+        rows += (f"<tr><td>{_esc(desc)}</td><td>{_esc(str(cod))}</td><td>UN</td>"
+                 f"<td style='text-align:center'>{qtd:g}</td>"
+                 f"<td style='text-align:right'>{_moeda(unit)}</td>"
+                 f"<td style='text-align:right'>{_moeda(qtd * unit)}</td></tr>")
+
+    html = f"""<!doctype html><html lang='pt-br'><meta charset='utf-8'>
+<title>Pedido {oid}</title><style>
+@media print {{ .noprint {{ display:none !important }} body {{ margin:0 }} }}
+body {{ font-family: Arial, Helvetica, sans-serif; color:#222; max-width:820px;
+       margin:20px auto; padding:0 24px; font-size:13px }}
+.bar {{ display:flex; gap:10px; margin-bottom:18px }}
+.btn {{ background:#2D3277; color:#fff; border:none; padding:10px 18px; border-radius:8px;
+       font-size:14px; cursor:pointer; text-decoration:none }}
+.btn.g {{ background:#fff; border:1px solid #cfd3da; color:#333 }}
+.head {{ display:flex; justify-content:space-between; align-items:flex-start;
+        border-bottom:2px solid #333; padding-bottom:12px }}
+.head .emp {{ text-align:right; font-size:12px; color:#444; line-height:1.5 }}
+h1.tt {{ text-align:center; font-size:20px; margin:18px 0 }}
+.grid {{ display:flex; gap:14px }}
+.box {{ border:1px solid #cfd3da; border-radius:6px; padding:10px 12px; flex:1; line-height:1.6 }}
+.box .lbl {{ color:#888; font-size:11px; text-transform:uppercase }}
+table {{ width:100%; border-collapse:collapse; margin-top:16px; font-size:12.5px }}
+th {{ background:#f2f3f5; text-align:left; padding:8px; border-bottom:1px solid #ccc }}
+td {{ padding:8px; border-bottom:1px solid #eee }}
+.tot {{ margin-top:12px; text-align:right; line-height:1.8 }}
+.tot b {{ font-size:15px }}
+.ft {{ margin-top:26px; text-align:center; color:#9aa2ad; font-size:11px }}
+</style>
+<div class='bar noprint'>
+  <button class='btn' onclick='window.print()'>&#128424; Imprimir / Salvar PDF</button>
+  <a class='btn g' href='javascript:history.back()'>Voltar</a>
+</div>
+<div class='head'>
+  <div><div style='font-size:18px;font-weight:700'>{_esc(empresa_nome)}</div></div>
+  <div class='emp'>{empresa_info}</div>
+</div>
+<h1 class='tt'>Pedido {oid}</h1>
+<div class='grid'>
+  <div class='box'><div class='lbl'>Cliente</div>{cliente_html}</div>
+  <div class='box' style='max-width:280px'>
+    <div class='lbl'>Numero do pedido</div><b>{codigo}</b>
+    <div class='lbl' style='margin-top:6px'>Data</div>{data}
+    <div class='lbl' style='margin-top:6px'>Loja</div>{_esc(mercadolivre.nome_exibicao(acc))}
+  </div>
+</div>
+<table>
+  <tr><th>Descricao do produto</th><th>Codigo</th><th>Un.</th>
+      <th style='text-align:center'>Qtd</th><th style='text-align:right'>Valor unit.</th>
+      <th style='text-align:right'>Valor total</th></tr>
+  {rows}
+</table>
+<div class='tot'>
+  N&ordm; de itens: {n_itens} &nbsp;&middot;&nbsp; Soma das qtds: {soma_qtd:g}<br>
+  <b>Total do pedido: {_moeda(total_ped)}</b>
+</div>
+<div class='ft'>Gerado pelo Zappe Hub</div>
+</html>"""
+    return HTMLResponse(html)
 
 
 @app.get("/vendas/diag", response_class=HTMLResponse)
