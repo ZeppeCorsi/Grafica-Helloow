@@ -863,11 +863,12 @@ def inbox(request: Request, pack: str = "", buyer: str = "", conta: str = "",
             selecionado = c["o"]
             sel_conta = next((a for a in contas if str(a["user_id"]) == conta), None)
             break
-    # se a conversa aberta nao esta na pagina atual, busca direto (sempre abre)
+    # se a conversa aberta nao esta na pagina atual, busca direto (sempre abre).
+    # o codigo pode ser de pedido OU de pacote (carrinho).
     if selecionado is None and pack and conta:
         acc = next((a for a in contas if str(a["user_id"]) == conta), None)
         if acc:
-            o = mercadolivre.obter_pedido(pack, token=acc)
+            o = mercadolivre.obter_pedido(pack, token=acc) or mercadolivre.pedido_do_pack(pack, token=acc)
             if o:
                 selecionado, sel_conta = o, acc
 
@@ -2059,7 +2060,7 @@ def vendas(request: Request, de: str = "", ate: str = "", loja: str = "",
         venda = float(o.get("total_amount") or 0)
         sino = ("<i class='ti ti-bell' style='color:#C77700' "
                 "title='Mensagem nao respondida'></i> " if pk in aguardando else "")
-        link_msg = f"/inbox?pack={pk}&buyer={comp_id}&conta={uid}"
+        link_msg = f"/conversa?pack={pk}&conta={uid}&buyer={comp_id}"
         linhas += (
             f"<a href='{link_msg}' style='display:flex;justify-content:space-between;gap:14px;"
             "align-items:center;padding:12px 14px;border:1px solid #e6e8eb;border-radius:10px;"
@@ -2137,6 +2138,84 @@ def vendas(request: Request, de: str = "", ate: str = "", loja: str = "",
         f"<div>{linhas}</div>{nav}"
     )
     return _pagina(corpo, ativo="vendas", papel=papel, nome=nome)
+
+
+@app.get("/conversa", response_class=HTMLResponse)
+def conversa(request: Request, pack: str = "", conta: str = "", buyer: str = ""):
+    """Conversa focada de UM pedido (rapida): abre direto do pedido, sem carregar
+    a caixa de entrada inteira. Aceita codigo de pedido ou de pacote."""
+    nome, papel = _atual(request)
+    contas = mercadolivre.contas()
+    if not contas:
+        return RedirectResponse("/ml/login")
+    acc = next((a for a in contas if str(a["user_id"]) == conta), None) or contas[0]
+    uid = str(acc["user_id"])
+    try:
+        o = mercadolivre.obter_pedido(pack, token=acc) or mercadolivre.pedido_do_pack(pack, token=acc) or {}
+    except (RuntimeError, httpx.HTTPError):
+        o = {}
+    try:
+        mensagens = mercadolivre.listar_mensagens(pack, user_id=uid, token=acc)
+    except (RuntimeError, httpx.HTTPError):
+        mensagens = []
+
+    comprador = (o.get("buyer") or {}).get("nickname") or "Comprador"
+    comp_id = buyer or str((o.get("buyer") or {}).get("id") or "")
+    its = o.get("order_items") or []
+    titulo = (its[0].get("item") or {}).get("title", "-") if its else "-"
+    total = o.get("total_amount", "-")
+    loja = mercadolivre.nome_exibicao(acc)
+    pack_id = str(o.get("pack_id") or "")
+    oid = str(o.get("id") or "")
+
+    baloes = ""
+    for m in mensagens:
+        eu = str((m.get("from") or {}).get("user_id", "")) == uid
+        txt = (m.get("text") or "").replace("<", "&lt;")
+        baloes += f"<div class='bub {'me' if eu else 'them'}'>{txt}{_anexos_html(m, uid)}</div>"
+    if not baloes:
+        baloes = "<p class='muted' style='text-align:center'>Sem mensagens nesta conversa ainda.</p>"
+
+    cod_html = f"# {oid}"
+    if pack_id and pack_id != oid:
+        cod_html += f" &middot; pacote {pack_id}"
+
+    corpo = (
+        "<link rel='stylesheet' href='https://cdn.jsdelivr.net/npm/"
+        "@tabler/icons-webfont@3.11.0/dist/tabler-icons.min.css'>"
+        "<p><a href='/vendas'>&larr; voltar aos pedidos</a></p>"
+        "<div class='card' style='padding:0;overflow:hidden;max-width:760px'>"
+        "<div class='dhead'>"
+        f"<div class='av' style='background:#FFF7CC;color:#7a6a00'>{comprador[:2].upper()}</div>"
+        f"<div style='flex:1'><div style='font-weight:600'>{comprador}</div>"
+        f"<div class='muted' style='font-size:12px'>Mercado Livre &middot; {loja}</div></div>"
+        f"{_badge_status(o.get('status'))}</div>"
+        f"<div class='ordbar'><span><i class='ti ti-package'></i> {titulo[:60]}</span>"
+        f"<span><i class='ti ti-cash'></i> R$ {total}</span>"
+        f"<span><i class='ti ti-hash'></i> {cod_html}</span></div>"
+        f"<div class='thread' style='height:auto;max-height:60vh' id='thread'>{baloes}</div>"
+        "<form class='reply' method='post' action='/conversa/responder'>"
+        f"<input type='hidden' name='pack' value='{pack}'/>"
+        f"<input type='hidden' name='conta' value='{uid}'/>"
+        f"<input type='hidden' name='buyer' value='{comp_id}'/>"
+        "<input name='texto' placeholder='Responder o comprador...' required/>"
+        "<button class='btn ml' type='submit'>Enviar</button></form>"
+        "</div>"
+        "<script>var t=document.getElementById('thread');if(t)t.scrollTop=t.scrollHeight;</script>"
+    )
+    return _pagina(corpo, ativo="vendas", papel=papel, nome=nome)
+
+
+@app.post("/conversa/responder")
+def conversa_responder(request: Request, pack: str = Form(...), conta: str = Form(""),
+                       buyer: str = Form(""), texto: str = Form(...)):
+    try:
+        mercadolivre.enviar_mensagem(pack, buyer, texto, user_id=conta or None)
+        nome, _ = _atual(request)
+        usuarios.registrar(nome or "?", "conversa_responder", pack)
+    except (RuntimeError, httpx.HTTPStatusError):
+        pass
+    return RedirectResponse(f"/conversa?pack={pack}&conta={conta}&buyer={buyer}", status_code=303)
 
 
 @app.get("/vendas/diag", response_class=HTMLResponse)

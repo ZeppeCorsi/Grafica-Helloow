@@ -306,15 +306,29 @@ def obter_pedido(order_id: str, user_id: str | None = None,
         return None
 
 
+def pedido_do_pack(pack_id: str, user_id: str | None = None,
+                   token: dict | None = None) -> dict | None:
+    """Se o codigo for de um PACK (carrinho de varios itens), retorna o pedido
+    de dentro dele. None se nao for um pack desta conta."""
+    try:
+        pk = get(f"/packs/{pack_id}", user_id=user_id, token=token)
+    except httpx.HTTPStatusError:
+        return None
+    ords = pk.get("orders") or []
+    if not ords:
+        return None
+    return obter_pedido(str(ords[0].get("id")), user_id=user_id, token=token)
+
+
 def buscar_pedido_cod(codigo: str, contas_lista: list[dict]) -> tuple:
-    """Acha um pedido pelo codigo em qualquer conta (com cache). Retorna (pedido, uid)."""
+    """Acha um pedido pelo codigo (de pedido OU de pacote) em qualquer conta. Retorna (pedido, uid)."""
     agora = time.time()
     c = _cache_busca.get(codigo)
     if c and agora - c[0] < _TTL_BUSCA:
         return c[1]
     achado = (None, None)
     for acc in contas_lista:
-        o = obter_pedido(codigo, token=acc)
+        o = obter_pedido(codigo, token=acc) or pedido_do_pack(codigo, token=acc)
         if o:
             achado = (o, str(acc["user_id"]))
             break
