@@ -2193,7 +2193,7 @@ def conversa(request: Request, pack: str = "", conta: str = "", buyer: str = "")
         f"<div class='ordbar'><span><i class='ti ti-package'></i> {titulo[:60]}</span>"
         f"<span><i class='ti ti-cash'></i> R$ {total}</span>"
         f"<span><i class='ti ti-hash'></i> {cod_html}</span>"
-        f"<a href='/pedido/imprimir?pack={pack}&conta={uid}' target='_blank' "
+        f"<a href='/imprimir?pack={pack}&conta={uid}' target='_blank' "
         "style='color:#534AB7;font-weight:500'><i class='ti ti-printer'></i> Imprimir pedido</a></div>"
         f"<div class='thread' style='height:auto;max-height:60vh' id='thread'>{baloes}</div>"
         "<form class='reply' method='post' action='/conversa/responder'>"
@@ -2220,9 +2220,10 @@ def conversa_responder(request: Request, pack: str = Form(...), conta: str = For
     return RedirectResponse(f"/conversa?pack={pack}&conta={conta}&buyer={buyer}", status_code=303)
 
 
-@app.get("/pedido/imprimir", response_class=HTMLResponse)
+@app.get("/imprimir", response_class=HTMLResponse)
 def pedido_imprimir(request: Request, pack: str = "", conta: str = ""):
-    """Pagina de impressao do pedido (o navegador salva como PDF)."""
+    """Pagina de impressao do pedido (o navegador salva como PDF).
+    Rota /imprimir (NAO /pedido/imprimir) para nao colidir com /pedido/{id} do Bling."""
     contas = mercadolivre.contas()
     if not contas:
         return RedirectResponse("/ml/login")
