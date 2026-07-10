@@ -16,8 +16,8 @@ from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import (bling, categorias, config, financeiro, ia_consumo, mercadolivre,
-               produtos, store, usuarios)
+from . import (bling, categorias, config, financeiro, fluxos, ia_consumo,
+               mercadolivre, produtos, store, usuarios)
 
 app = FastAPI(title="Hub de atendimento")
 
@@ -1995,7 +1995,7 @@ def produtos_diag(request: Request):
 # --------------------------------------------------------------------------- #
 @app.get("/vendas", response_class=HTMLResponse)
 def vendas(request: Request, de: str = "", ate: str = "", loja: str = "",
-           q: str = "", pag: int = 1, atualizar: str = ""):
+           q: str = "", pag: int = 1, atualizar: str = "", atend: str = "", fluxo: str = ""):
     nome, papel = _atual(request)
     contas = mercadolivre.contas()
     if not contas:
@@ -2010,6 +2010,14 @@ def vendas(request: Request, de: str = "", ate: str = "", loja: str = "",
     de = de or (hoje - timedelta(days=30)).isoformat()
     ate = ate or hoje.isoformat()
     termo = q.strip().lower()
+
+    equipe = [u["nome"] for u in usuarios.listar_usuarios()]
+    flx = fluxos.listar_fluxos()
+    fm = fluxos.fluxo_marcas()       # pack -> fluxo_id
+    am = fluxos.atendente_marcas()   # pack -> atendente
+
+    def _pk(o):
+        return str(o.get("pack_id") or o.get("id"))
 
     # junta os pedidos de todas as contas (ou da loja filtrada)
     registros: list[tuple] = []
@@ -2039,6 +2047,11 @@ def vendas(request: Request, de: str = "", ate: str = "", loja: str = "",
             return termo in cod or termo in pack or termo in comp or termo in tit
         registros = [r for r in registros if _bate(r)]
 
+    if atend:
+        registros = [r for r in registros if am.get(_pk(r[0]), "") == atend]
+    if fluxo:
+        registros = [r for r in registros if str(fm.get(_pk(r[0]), "")) == fluxo]
+
     registros.sort(key=lambda r: str(r[0].get("date_created") or ""), reverse=True)
 
     total_n = len(registros)
@@ -2049,10 +2062,14 @@ def vendas(request: Request, de: str = "", ate: str = "", loja: str = "",
     tem_mais = ini + por_pag < total_n
 
     apel = {str(a["user_id"]): mercadolivre.nome_exibicao(a) for a in contas}
+    voltar = "/vendas" + ("?" + request.url.query if request.url.query else "")
+    voltar = voltar.replace("&atualizar=1", "")  # nao repetir o refresh ao voltar
+    selstyle = ("font-size:12px;padding:5px 6px;border:1px solid #d7dade;border-radius:6px;"
+                "background:#fff;max-width:160px")
 
     linhas = ""
     for o, uid, aguardando in pagina_itens:
-        pk = str(o.get("pack_id") or o.get("id"))
+        pk = _pk(o)
         comprador = (o.get("buyer") or {}).get("nickname", "-")
         comp_id = str((o.get("buyer") or {}).get("id", ""))
         its = o.get("order_items") or []
@@ -2061,57 +2078,86 @@ def vendas(request: Request, de: str = "", ate: str = "", loja: str = "",
         sino = ("<i class='ti ti-bell' style='color:#C77700' "
                 "title='Mensagem nao respondida'></i> " if pk in aguardando else "")
         link_msg = f"/conversa?pack={pk}&conta={uid}&buyer={comp_id}"
+        pack_disp = (f" &middot; <b>pacote {o.get('pack_id')}</b>"
+                     if o.get("pack_id") and str(o.get("pack_id")) != str(o.get("id")) else "")
+        at_atual = am.get(pk, "")
+        opt_at = "<option value=''>&mdash; atendente &mdash;</option>" + "".join(
+            f"<option value='{_esc(n)}' {'selected' if n == at_atual else ''}>{_esc(n)}</option>"
+            for n in equipe)
+        fx_atual = fm.get(pk)
+        opt_fx = "<option value=''>&mdash; fluxo &mdash;</option>" + "".join(
+            f"<option value='{f['id']}' {'selected' if f['id'] == fx_atual else ''}>{_esc(f['nome'])}</option>"
+            for f in flx)
         linhas += (
-            f"<a href='{link_msg}' style='display:flex;justify-content:space-between;gap:14px;"
-            "align-items:center;padding:12px 14px;border:1px solid #e6e8eb;border-radius:10px;"
-            "background:#fff;margin-bottom:8px'>"
-            "<div style='min-width:0;flex:1'>"
+            "<div style='border:1px solid #e6e8eb;border-radius:10px;background:#fff;"
+            "margin-bottom:8px;padding:12px 14px'>"
+            "<div style='display:flex;justify-content:space-between;gap:14px;align-items:flex-start'>"
+            f"<a href='{link_msg}' style='min-width:0;flex:1;color:inherit'>"
             "<div style='font-weight:600;display:flex;align-items:center;gap:6px;flex-wrap:wrap'>"
             f"{sino}{comprador}"
             f"<span class='badge' style='background:#FFF7CC;color:#7a6a00'>{apel.get(uid, uid)}</span></div>"
             "<div class='muted' style='font-size:13px;white-space:nowrap;overflow:hidden;"
             f"text-overflow:ellipsis;max-width:520px;margin-top:1px'>{titulo}</div>"
             "<div class='muted' style='font-size:11px;margin-top:2px'>"
-            f"<i class='ti ti-hash' style='font-size:11px'></i> {o.get('id', '-')}"
-            + (f" &middot; <b title='Codigo do pacote/carrinho (o que o cliente costuma mandar)'>"
-               f"pacote {o.get('pack_id')}</b>"
-               if o.get("pack_id") and str(o.get("pack_id")) != str(o.get("id")) else "")
-            + f" &middot; {_data_br(o.get('date_created'))}</div></div>"
+            f"<i class='ti ti-hash' style='font-size:11px'></i> {o.get('id', '-')}{pack_disp}"
+            f" &middot; {_data_br(o.get('date_created'))}</div></a>"
             "<div style='text-align:right;flex:none'>"
             f"<div style='font-weight:600'>{_moeda(venda)}</div>"
-            f"<div style='margin:5px 0'>{_badge_status(o.get('status'))}</div>"
-            "<div style='color:#534AB7;font-size:12.5px;white-space:nowrap'>"
-            "<i class='ti ti-message'></i> Mensagens &rarr;</div>"
-            "</div></a>"
+            f"<div style='margin-top:4px'>{_badge_status(o.get('status'))}</div></div>"
+            "</div>"
+            "<div style='display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px;"
+            "padding-top:10px;border-top:1px solid #f0f1f4'>"
+            "<form method='post' action='/vendas/atendente' style='display:inline-flex;"
+            "align-items:center;gap:4px;margin:0'>"
+            f"<input type='hidden' name='pack' value='{pk}'/>"
+            f"<input type='hidden' name='voltar' value='{_esc(voltar)}'/>"
+            "<i class='ti ti-user' style='color:#7a828e'></i>"
+            f"<select name='atendente' onchange='this.form.submit()' style='{selstyle}'>{opt_at}</select></form>"
+            "<form method='post' action='/vendas/fluxo' style='display:inline-flex;"
+            "align-items:center;gap:4px;margin:0'>"
+            f"<input type='hidden' name='pack' value='{pk}'/>"
+            f"<input type='hidden' name='voltar' value='{_esc(voltar)}'/>"
+            "<i class='ti ti-git-branch' style='color:#7a828e'></i>"
+            f"<select name='fluxo' onchange='this.form.submit()' style='{selstyle}'>{opt_fx}</select></form>"
+            f"<a href='{link_msg}' style='margin-left:auto;color:#534AB7;font-size:12.5px;"
+            "white-space:nowrap'><i class='ti ti-message'></i> Mensagens &rarr;</a>"
+            "</div></div>"
         )
     if not linhas:
         linhas = "<div class='muted' style='padding:14px'>Nenhum pedido no periodo.</div>"
 
-    # filtros (periodo + loja + busca)
-    opts = "<option value=''>Todas as lojas</option>" + "".join(
+    # filtros (periodo + loja + atendente + fluxo + busca)
+    campo = "padding:9px;border:1px solid #d7dade;border-radius:8px"
+    opt_loja = "<option value=''>Todas as lojas</option>" + "".join(
         f"<option value='{a['user_id']}' {'selected' if loja == str(a['user_id']) else ''}>"
         f"{mercadolivre.nome_exibicao(a)}</option>" for a in contas)
+    opt_at_f = "<option value=''>Todos atendentes</option>" + "".join(
+        f"<option value='{_esc(n)}' {'selected' if atend == n else ''}>{_esc(n)}</option>" for n in equipe)
+    opt_fx_f = "<option value=''>Todos fluxos</option>" + "".join(
+        f"<option value='{f['id']}' {'selected' if fluxo == str(f['id']) else ''}>{_esc(f['nome'])}</option>"
+        for f in flx)
     filtros = (
         "<form method='get' action='/vendas' "
-        "style='display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin:6px 0 16px'>"
-        "<div><div class='muted' style='font-size:12px'>De</div>"
-        f"<input type='date' name='de' value='{de}' "
-        "style='padding:8px;border:1px solid #d7dade;border-radius:8px'/></div>"
-        "<div><div class='muted' style='font-size:12px'>Ate</div>"
-        f"<input type='date' name='ate' value='{ate}' "
-        "style='padding:8px;border:1px solid #d7dade;border-radius:8px'/></div>"
-        "<div><div class='muted' style='font-size:12px'>Loja</div>"
-        f"<select name='loja' style='padding:9px;border:1px solid #d7dade;border-radius:8px'>{opts}</select></div>"
-        "<div style='flex:1;min-width:180px'><div class='muted' style='font-size:12px'>Busca</div>"
-        f"<input name='q' value='{q}' placeholder='codigo, cliente ou produto' "
-        "style='width:100%;padding:9px;border:1px solid #d7dade;border-radius:8px'/></div>"
+        "style='display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin:6px 0 14px'>"
+        f"<div><div class='muted' style='font-size:12px'>De</div>"
+        f"<input type='date' name='de' value='{de}' style='{campo}'/></div>"
+        f"<div><div class='muted' style='font-size:12px'>Ate</div>"
+        f"<input type='date' name='ate' value='{ate}' style='{campo}'/></div>"
+        f"<div><div class='muted' style='font-size:12px'>Loja</div>"
+        f"<select name='loja' style='{campo}'>{opt_loja}</select></div>"
+        f"<div><div class='muted' style='font-size:12px'>Atendente</div>"
+        f"<select name='atend' style='{campo}'>{opt_at_f}</select></div>"
+        f"<div><div class='muted' style='font-size:12px'>Fluxo</div>"
+        f"<select name='fluxo' style='{campo}'>{opt_fx_f}</select></div>"
+        "<div style='flex:1;min-width:140px'><div class='muted' style='font-size:12px'>Busca</div>"
+        f"<input name='q' value='{q}' placeholder='codigo, cliente ou produto' style='width:100%;{campo}'/></div>"
         "<button class='btn'>Filtrar</button></form>"
     )
 
     # paginacao (some quando esta buscando)
     nav = ""
     if not termo:
-        base = f"/vendas?de={de}&ate={ate}&loja={loja}"
+        base = f"/vendas?de={de}&ate={ate}&loja={loja}&atend={atend}&fluxo={fluxo}"
         partes = []
         if pag > 1:
             partes.append(f"<a class='btn ghost' href='{base}&pag={pag - 1}'>&larr; Recentes</a>")
@@ -2121,23 +2167,109 @@ def vendas(request: Request, de: str = "", ate: str = "", loja: str = "",
         nav = ("<div style='display:flex;gap:8px;align-items:center;justify-content:center;"
                "margin-top:14px'>" + "".join(partes) + "</div>")
 
+    ger_fluxos = ("<a class='muted' href='/fluxos' style='font-size:13px'>"
+                  "<i class='ti ti-settings'></i> gerenciar fluxos</a>" if papel == "admin" else "")
+    atualizar_href = (f"/vendas?de={de}&ate={ate}&loja={loja}&atend={atend}&fluxo={fluxo}"
+                      f"&q={q}&atualizar=1")
     corpo = (
         "<link rel='stylesheet' href='https://cdn.jsdelivr.net/npm/"
         "@tabler/icons-webfont@3.11.0/dist/tabler-icons.min.css'>"
+        "<div style='display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap'>"
         "<h1 style='margin-bottom:4px'>Pedidos</h1>"
-        "<p class='muted'>Direto do Mercado Livre &mdash; sem depender do Bling. "
-        "Clique no pedido para abrir o pos-venda (mensagens) do comprador.</p>"
+        f"{ger_fluxos}</div>"
+        "<p class='muted'>Direto do Mercado Livre. Clique no pedido para abrir as mensagens; "
+        "defina o <b>atendente</b> e o <b>fluxo</b> de cada pedido.</p>"
         f"{filtros}"
         "<div style='display:flex;justify-content:space-between;align-items:center;"
         "flex-wrap:wrap;gap:8px;margin-bottom:8px'>"
         f"<span class='muted' style='font-size:13px'>{total_n} pedido(s) no periodo "
         f"{_data_br(de)} a {_data_br(ate)}.</span>"
-        f"<a class='btn ghost' href='/vendas?de={de}&ate={ate}&loja={loja}&q={q}&atualizar=1' "
+        f"<a class='btn ghost' href='{atualizar_href}' "
         "style='padding:6px 12px;font-size:12.5px' title='Buscar pedidos novos agora'>"
         "<i class='ti ti-refresh'></i> Atualizar agora</a></div>"
         f"<div>{linhas}</div>{nav}"
     )
     return _pagina(corpo, ativo="vendas", papel=papel, nome=nome)
+
+
+@app.post("/vendas/atendente")
+def vendas_atendente(request: Request, pack: str = Form(...), atendente: str = Form(""),
+                     voltar: str = Form("/vendas")):
+    fluxos.definir_atendente(pack, atendente.strip())
+    return RedirectResponse(voltar or "/vendas", status_code=303)
+
+
+@app.post("/vendas/fluxo")
+def vendas_fluxo(request: Request, pack: str = Form(...), fluxo: str = Form(""),
+                 voltar: str = Form("/vendas")):
+    fid = int(fluxo) if fluxo.strip().isdigit() else None
+    fluxos.marcar_fluxo(pack, fid)
+    return RedirectResponse(voltar or "/vendas", status_code=303)
+
+
+@app.get("/fluxos", response_class=HTMLResponse)
+def fluxos_page(request: Request):
+    nome, papel = _atual(request)
+    if papel != "admin":
+        return RedirectResponse("/inbox")
+    lista = fluxos.listar_fluxos()
+    linhas = ""
+    for f in lista:
+        linhas += (
+            "<tr><td>"
+            "<form method='post' action='/fluxos/renomear' style='display:flex;gap:6px;margin:0'>"
+            f"<input type='hidden' name='id' value='{f['id']}'/>"
+            f"<input name='nome' value='{_esc(f['nome'])}' "
+            "style='flex:1;padding:7px;border:1px solid #d7dade;border-radius:7px'/>"
+            "<button class='btn ghost' style='padding:4px 10px;font-size:12px'>salvar</button></form>"
+            "</td><td style='text-align:right;width:90px'>"
+            "<form method='post' action='/fluxos/excluir' style='display:inline' "
+            "onsubmit=\"return confirm('Excluir este fluxo?')\">"
+            f"<input type='hidden' name='id' value='{f['id']}'/>"
+            "<button class='btn ghost' style='padding:4px 10px;font-size:12px'>excluir</button></form>"
+            "</td></tr>"
+        )
+    if not lista:
+        linhas = "<tr><td colspan='2' class='muted'>Nenhum fluxo cadastrado ainda.</td></tr>"
+    corpo = (
+        "<h1>Fluxos de atendimento</h1>"
+        "<p class='muted'>Crie as etapas do seu atendimento (ex.: <i>Aguardando arte, "
+        "Em producao, Enviado</i>). Depois voce marca o fluxo de cada pedido na aba Pedidos.</p>"
+        "<div class='card' style='max-width:520px'>"
+        f"<table><tr><th>Fluxo</th><th></th></tr>{linhas}</table>"
+        "<form method='post' action='/fluxos/criar' style='display:flex;gap:8px;margin-top:14px'>"
+        "<input name='nome' placeholder='Novo fluxo (ex: Aguardando arte)' required "
+        "style='flex:1;padding:9px;border:1px solid #d7dade;border-radius:8px'/>"
+        "<button class='btn'>Adicionar</button></form></div>"
+        "<p style='margin-top:14px'><a href='/vendas'>&larr; voltar aos pedidos</a></p>"
+    )
+    return _pagina(corpo, ativo="vendas", papel=papel, nome=nome)
+
+
+@app.post("/fluxos/criar")
+def fluxos_criar(request: Request, nome: str = Form(...)):
+    if _atual(request)[1] != "admin":
+        return RedirectResponse("/inbox")
+    if nome.strip():
+        fluxos.criar_fluxo(nome.strip())
+    return RedirectResponse("/fluxos", status_code=303)
+
+
+@app.post("/fluxos/renomear")
+def fluxos_renomear(request: Request, id: int = Form(...), nome: str = Form(...)):
+    if _atual(request)[1] != "admin":
+        return RedirectResponse("/inbox")
+    if nome.strip():
+        fluxos.renomear_fluxo(id, nome.strip())
+    return RedirectResponse("/fluxos", status_code=303)
+
+
+@app.post("/fluxos/excluir")
+def fluxos_excluir(request: Request, id: int = Form(...)):
+    if _atual(request)[1] != "admin":
+        return RedirectResponse("/inbox")
+    fluxos.excluir_fluxo(id)
+    return RedirectResponse("/fluxos", status_code=303)
 
 
 @app.get("/conversa", response_class=HTMLResponse)
@@ -2158,6 +2290,10 @@ def conversa(request: Request, pack: str = "", conta: str = "", buyer: str = "")
         mensagens = mercadolivre.listar_mensagens(pack, user_id=uid, token=acc)
     except (RuntimeError, httpx.HTTPError):
         mensagens = []
+    try:
+        env = mercadolivre.dados_envio(o, user_id=uid, token=acc) if o else {}
+    except Exception:
+        env = {}
 
     comprador = (o.get("buyer") or {}).get("nickname") or "Comprador"
     comp_id = buyer or str((o.get("buyer") or {}).get("id") or "")
@@ -2192,7 +2328,9 @@ def conversa(request: Request, pack: str = "", conta: str = "", buyer: str = "")
         f"{_badge_status(o.get('status'))}</div>"
         f"<div class='ordbar'><span><i class='ti ti-package'></i> {titulo[:60]}</span>"
         f"<span><i class='ti ti-cash'></i> R$ {total}</span>"
-        f"<span><i class='ti ti-hash'></i> {cod_html}</span>"
+        + (f"<span style='color:#A15C00;font-weight:500'><i class='ti ti-truck'></i> "
+           f"Enviar ate {_data_br(env.get('enviar_ate'))}</span>" if env.get("enviar_ate") else "")
+        + f"<span><i class='ti ti-hash'></i> {cod_html}</span>"
         f"<a href='/imprimir?pack={pack}&conta={uid}' target='_blank' "
         "style='color:#534AB7;font-weight:500'><i class='ti ti-printer'></i> Imprimir pedido</a></div>"
         f"<div class='thread' style='height:auto;max-height:60vh' id='thread'>{baloes}</div>"
@@ -2318,7 +2456,8 @@ td {{ padding:8px; border-bottom:1px solid #eee }}
   <div class='box'><div class='lbl'>Cliente</div>{cliente_html}</div>
   <div class='box' style='max-width:280px'>
     <div class='lbl'>Numero do pedido</div><b>{codigo}</b>
-    <div class='lbl' style='margin-top:6px'>Data</div>{data}
+    <div class='lbl' style='margin-top:6px'>Data do pedido</div>{data}
+    <div class='lbl' style='margin-top:6px'>Enviar ate</div>{_data_br(env.get('enviar_ate')) if env.get('enviar_ate') else '-'}
     <div class='lbl' style='margin-top:6px'>Loja</div>{_esc(mercadolivre.nome_exibicao(acc))}
   </div>
 </div>

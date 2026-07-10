@@ -318,9 +318,13 @@ def dados_envio(order: dict, user_id: str | None = None,
     except (RuntimeError, httpx.HTTPError):
         return {}
     ra = s.get("receiver_address") or {}
+    lt = s.get("lead_time") or {}
 
     def _nm(x):
         return x.get("name", "") if isinstance(x, dict) else (x or "")
+
+    def _dt(x):
+        return (x or {}).get("date", "") if isinstance(x, dict) else ""
 
     return {
         "nome": ra.get("receiver_name") or "",
@@ -332,6 +336,10 @@ def dados_envio(order: dict, user_id: str | None = None,
         "cidade": _nm(ra.get("city")),
         "estado": _nm(ra.get("state")),
         "cep": ra.get("zip_code") or "",
+        # datas que o ML fornece no envio
+        "enviar_ate": _dt(lt.get("estimated_handling_limit")),
+        "entrega_estimada": _dt(lt.get("estimated_delivery_time")),
+        "envio_status": s.get("status") or "",
     }
 
 
