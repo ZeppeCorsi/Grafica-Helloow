@@ -319,12 +319,22 @@ def dados_envio(order: dict, user_id: str | None = None,
         return {}
     ra = s.get("receiver_address") or {}
     lt = s.get("lead_time") or {}
+    so = s.get("shipping_option") or {}
 
     def _nm(x):
         return x.get("name", "") if isinstance(x, dict) else (x or "")
 
     def _dt(x):
-        return (x or {}).get("date", "") if isinstance(x, dict) else ""
+        return (x or {}).get("date", "") if isinstance(x, dict) else (x or "")
+
+    # "enviar ate" (limite de manuseio) pode vir em varios caminhos conforme o envio
+    enviar_ate = (_dt(lt.get("estimated_handling_limit"))
+                  or _dt(so.get("estimated_handling_limit"))
+                  or _dt(s.get("estimated_handling_limit"))
+                  or _dt((s.get("status_history") or {}).get("date_ready_to_ship")))
+    entrega = (_dt(lt.get("estimated_delivery_time"))
+               or _dt(so.get("estimated_delivery_time"))
+               or _dt(lt.get("estimated_delivery_final")))
 
     return {
         "nome": ra.get("receiver_name") or "",
@@ -336,9 +346,8 @@ def dados_envio(order: dict, user_id: str | None = None,
         "cidade": _nm(ra.get("city")),
         "estado": _nm(ra.get("state")),
         "cep": ra.get("zip_code") or "",
-        # datas que o ML fornece no envio
-        "enviar_ate": _dt(lt.get("estimated_handling_limit")),
-        "entrega_estimada": _dt(lt.get("estimated_delivery_time")),
+        "enviar_ate": enviar_ate,
+        "entrega_estimada": entrega,
         "envio_status": s.get("status") or "",
     }
 

@@ -2488,6 +2488,20 @@ def vendas_diag(request: Request, cod: str = ""):
     de = (hoje - timedelta(days=90)).isoformat()
     ate = hoje.isoformat()
     codigos = [c.strip() for c in cod.replace(",", " ").split() if c.strip()]
+
+    def _dump_ship(o, uid, acc) -> str:
+        sid = (o.get("shipping") or {}).get("id")
+        if not sid:
+            return "          (pedido sem shipping.id)"
+        try:
+            s = mercadolivre.get(f"/shipments/{sid}", user_id=uid, token=acc)
+        except Exception as e:
+            code = getattr(getattr(e, "response", None), "status_code", "")
+            return f"          erro shipment {sid}: {type(e).__name__} {code}"
+        return (f"          shipment {sid} status={s.get('status')}\n"
+                f"          lead_time={str(s.get('lead_time'))[:500]}\n"
+                f"          shipping_option={str(s.get('shipping_option'))[:300]}")
+
     out: list[str] = []
     for code in codigos:
         out.append(f"===== codigo {code} =====")
@@ -2511,6 +2525,12 @@ def vendas_diag(request: Request, cod: str = ""):
                     out.append(f"  [{loja}] e um PACK (carrinho). pedidos dentro: {ords}  "
                                f"status={pk.get('status')}")
                     achou = True
+                    try:
+                        o2 = mercadolivre.obter_pedido(ords[0], token=acc) if ords else None
+                        if o2:
+                            out.append(_dump_ship(o2, uid, acc))
+                    except Exception:
+                        pass
                 else:
                     out.append(f"  [{loja}] nao e pedido nem pack desta conta (404)")
                 continue
@@ -2531,6 +2551,7 @@ def vendas_diag(request: Request, cod: str = ""):
                            + ("SIM" if na_lista else "NAO"))
             except Exception as e:
                 out.append(f"          erro ao listar periodo: {type(e).__name__}")
+            out.append(_dump_ship(o, uid, acc))
         if not achou:
             out.append("  -> nao encontrado em NENHUMA conta conectada.")
         out.append("")
