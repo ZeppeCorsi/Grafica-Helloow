@@ -5,6 +5,7 @@ Rodar:
 Depois abra http://localhost:8000 no navegador.
 """
 import calendar
+import concurrent.futures
 import io
 import secrets
 from datetime import date, datetime, timedelta
@@ -1995,7 +1996,8 @@ def produtos_diag(request: Request):
 # --------------------------------------------------------------------------- #
 @app.get("/vendas", response_class=HTMLResponse)
 def vendas(request: Request, de: str = "", ate: str = "", loja: str = "",
-           q: str = "", pag: int = 1, atualizar: str = "", atend: str = "", fluxo: str = ""):
+           q: str = "", pag: int = 1, atualizar: str = "", atend: str = "", fluxo: str = "",
+           ordenar: str = ""):
     nome, papel = _atual(request)
     contas = mercadolivre.contas()
     if not contas:
@@ -2052,7 +2054,25 @@ def vendas(request: Request, de: str = "", ate: str = "", loja: str = "",
     if fluxo:
         registros = [r for r in registros if str(fm.get(_pk(r[0]), "")) == fluxo]
 
-    registros.sort(key=lambda r: str(r[0].get("date_created") or ""), reverse=True)
+    # data de envio ("enviar ate") - buscada em paralelo (com cache) do ML
+    envio_map: dict = {}
+    acc_by_uid = {str(a["user_id"]): a for a in contas}
+
+    def _fetch_env(reg):
+        try:
+            return (_pk(reg[0]),
+                    mercadolivre.enviar_ate_de(reg[0], user_id=reg[1], token=acc_by_uid.get(reg[1])))
+        except Exception:
+            return (_pk(reg[0]), "")
+
+    if ordenar == "envio":
+        alvo = registros[:150]  # busca so nos mais recentes p/ nao ficar lento
+        with concurrent.futures.ThreadPoolExecutor(max_workers=12) as ex:
+            for pk_, val in ex.map(_fetch_env, alvo):
+                envio_map[pk_] = val
+        registros.sort(key=lambda r: envio_map.get(_pk(r[0]), "") or "9999")
+    else:
+        registros.sort(key=lambda r: str(r[0].get("date_created") or ""), reverse=True)
 
     total_n = len(registros)
     por_pag = 25
@@ -2060,6 +2080,12 @@ def vendas(request: Request, de: str = "", ate: str = "", loja: str = "",
     ini = (pag - 1) * por_pag
     pagina_itens = registros[ini:ini + por_pag]
     tem_mais = ini + por_pag < total_n
+
+    faltam = [r for r in pagina_itens if _pk(r[0]) not in envio_map]
+    if faltam:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as ex:
+            for pk_, val in ex.map(_fetch_env, faltam):
+                envio_map[pk_] = val
 
     apel = {str(a["user_id"]): mercadolivre.nome_exibicao(a) for a in contas}
     voltar = "/vendas" + ("?" + request.url.query if request.url.query else "")
@@ -2080,6 +2106,12 @@ def vendas(request: Request, de: str = "", ate: str = "", loja: str = "",
         link_msg = f"/conversa?pack={pk}&conta={uid}&buyer={comp_id}"
         pack_disp = (f" &middot; <b>pacote {o.get('pack_id')}</b>"
                      if o.get("pack_id") and str(o.get("pack_id")) != str(o.get("id")) else "")
+        env_ate = envio_map.get(pk, "")
+        env_html = ""
+        if env_ate:
+            cor_env = "#A32D2D" if env_ate[:10] < hoje.isoformat() else "#A15C00"
+            env_html = (f" &middot; <span style='color:{cor_env};font-weight:600'>"
+                        f"<i class='ti ti-truck'></i> enviar ate {_data_br(env_ate)}</span>")
         at_atual = am.get(pk, "")
         opt_at = "<option value=''>&mdash; atendente &mdash;</option>" + "".join(
             f"<option value='{_esc(n)}' {'selected' if n == at_atual else ''}>{_esc(n)}</option>"
@@ -2100,7 +2132,7 @@ def vendas(request: Request, de: str = "", ate: str = "", loja: str = "",
             f"text-overflow:ellipsis;max-width:520px;margin-top:1px'>{titulo}</div>"
             "<div class='muted' style='font-size:11px;margin-top:2px'>"
             f"<i class='ti ti-hash' style='font-size:11px'></i> {o.get('id', '-')}{pack_disp}"
-            f" &middot; {_data_br(o.get('date_created'))}</div></a>"
+            f" &middot; {_data_br(o.get('date_created'))}{env_html}</div></a>"
             "<div style='text-align:right;flex:none'>"
             f"<div style='font-weight:600'>{_moeda(venda)}</div>"
             f"<div style='margin-top:4px'>{_badge_status(o.get('status'))}</div></div>"
@@ -2149,6 +2181,10 @@ def vendas(request: Request, de: str = "", ate: str = "", loja: str = "",
         f"<select name='atend' style='{campo}'>{opt_at_f}</select></div>"
         f"<div><div class='muted' style='font-size:12px'>Fluxo</div>"
         f"<select name='fluxo' style='{campo}'>{opt_fx_f}</select></div>"
+        f"<div><div class='muted' style='font-size:12px'>Ordenar</div>"
+        f"<select name='ordenar' style='{campo}'><option value=''>Recentes</option>"
+        f"<option value='envio' {'selected' if ordenar == 'envio' else ''}>Enviar ate (prazo)</option>"
+        "</select></div>"
         "<div style='flex:1;min-width:140px'><div class='muted' style='font-size:12px'>Busca</div>"
         f"<input name='q' value='{q}' placeholder='codigo, cliente ou produto' style='width:100%;{campo}'/></div>"
         "<button class='btn'>Filtrar</button></form>"
@@ -2157,7 +2193,7 @@ def vendas(request: Request, de: str = "", ate: str = "", loja: str = "",
     # paginacao (some quando esta buscando)
     nav = ""
     if not termo:
-        base = f"/vendas?de={de}&ate={ate}&loja={loja}&atend={atend}&fluxo={fluxo}"
+        base = f"/vendas?de={de}&ate={ate}&loja={loja}&atend={atend}&fluxo={fluxo}&ordenar={ordenar}"
         partes = []
         if pag > 1:
             partes.append(f"<a class='btn ghost' href='{base}&pag={pag - 1}'>&larr; Recentes</a>")
@@ -2170,7 +2206,7 @@ def vendas(request: Request, de: str = "", ate: str = "", loja: str = "",
     ger_fluxos = ("<a class='muted' href='/fluxos' style='font-size:13px'>"
                   "<i class='ti ti-settings'></i> gerenciar fluxos</a>" if papel == "admin" else "")
     atualizar_href = (f"/vendas?de={de}&ate={ate}&loja={loja}&atend={atend}&fluxo={fluxo}"
-                      f"&q={q}&atualizar=1")
+                      f"&ordenar={ordenar}&q={q}&atualizar=1")
     corpo = (
         "<link rel='stylesheet' href='https://cdn.jsdelivr.net/npm/"
         "@tabler/icons-webfont@3.11.0/dist/tabler-icons.min.css'>"

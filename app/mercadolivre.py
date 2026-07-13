@@ -30,6 +30,8 @@ _TTL_PERIODO = 120
 _cache_periodo: dict = {}  # (uid, de, ate) -> (timestamp, pedidos)
 _TTL_PRODUTOS = 300
 _cache_produtos: dict = {}  # uid -> (timestamp, lista de produtos)
+_TTL_ENVIO = 900
+_cache_envio: dict = {}     # order_id -> (timestamp, enviar_ate)
 _migrado = False           # a migracao do token legado roda so 1x por processo
 
 
@@ -327,14 +329,16 @@ def dados_envio(order: dict, user_id: str | None = None,
     def _dt(x):
         return (x or {}).get("date", "") if isinstance(x, dict) else (x or "")
 
-    # "enviar ate" (limite de manuseio) pode vir em varios caminhos conforme o envio
-    enviar_ate = (_dt(lt.get("estimated_handling_limit"))
+    # "enviar ate" (limite de despacho) pode vir em varios caminhos conforme o envio.
+    # Na maioria dos envios do ML fica em shipping_option.estimated_schedule_limit.
+    enviar_ate = (_dt(so.get("estimated_schedule_limit"))
+                  or _dt(lt.get("estimated_handling_limit"))
                   or _dt(so.get("estimated_handling_limit"))
                   or _dt(s.get("estimated_handling_limit"))
                   or _dt((s.get("status_history") or {}).get("date_ready_to_ship")))
-    entrega = (_dt(lt.get("estimated_delivery_time"))
-               or _dt(so.get("estimated_delivery_time"))
-               or _dt(lt.get("estimated_delivery_final")))
+    entrega = (_dt(so.get("estimated_delivery_final"))
+               or _dt(lt.get("estimated_delivery_time"))
+               or _dt(so.get("estimated_delivery_time")))
 
     return {
         "nome": ra.get("receiver_name") or "",
@@ -350,6 +354,22 @@ def dados_envio(order: dict, user_id: str | None = None,
         "entrega_estimada": entrega,
         "envio_status": s.get("status") or "",
     }
+
+
+def enviar_ate_de(order: dict, user_id: str | None = None,
+                  token: dict | None = None) -> str:
+    """Data 'enviar ate' (limite de despacho) do pedido, com cache (nao muda)."""
+    oid = str(order.get("id") or "")
+    agora = time.time()
+    c = _cache_envio.get(oid)
+    if c and agora - c[0] < _TTL_ENVIO:
+        return c[1]
+    try:
+        val = (dados_envio(order, user_id=user_id, token=token) or {}).get("enviar_ate", "")
+    except (RuntimeError, httpx.HTTPError):
+        val = ""
+    _cache_envio[oid] = (agora, val)
+    return val
 
 
 def pedido_do_pack(pack_id: str, user_id: str | None = None,
