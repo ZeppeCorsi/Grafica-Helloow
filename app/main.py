@@ -687,6 +687,33 @@ def _badge_status(status: str) -> str:
     return f"<span class='badge' style='background:{bg};color:{fg}'>{txt}</span>"
 
 
+# situacao do ENVIO (Mercado Livre): entregue x nao entregue x a enviar...
+_ENVIO_BADGE = {
+    "pending": ("A enviar", "#C77700", "#FCF1DD"),
+    "ready_to_ship": ("A enviar", "#C77700", "#FCF1DD"),
+    "handling": ("A enviar", "#C77700", "#FCF1DD"),
+    "shipped": ("Enviado", "#0C447C", "#E6F1FB"),
+    "delivered": ("Entregue", "#0F6E56", "#E1F5EE"),
+    "not_delivered": ("Nao entregue", "#A32D2D", "#FCEBEB"),
+    "cancelled": ("Cancelado", "#8a93a0", "#EEF0F2"),
+}
+# grupos usados no filtro de situacao
+_ENVIO_GRUPO = {
+    "a_enviar": {"pending", "ready_to_ship", "handling"},
+    "enviado": {"shipped"},
+    "entregue": {"delivered"},
+    "nao_entregue": {"not_delivered"},
+}
+
+
+def _badge_envio(status: str) -> str:
+    v = _ENVIO_BADGE.get(status)
+    if not v:
+        return ""
+    rot, fg, bg = v
+    return f"<span class='badge' style='color:{fg};background:{bg}'>{rot}</span>"
+
+
 def _eh_imagem(nome: str) -> bool:
     nome = (nome or "").lower()
     return nome.endswith((".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"))
@@ -1997,7 +2024,7 @@ def produtos_diag(request: Request):
 @app.get("/vendas", response_class=HTMLResponse)
 def vendas(request: Request, de: str = "", ate: str = "", loja: str = "",
            q: str = "", pag: int = 1, atualizar: str = "", atend: str = "", fluxo: str = "",
-           ordenar: str = ""):
+           ordenar: str = "", envio: str = ""):
     nome, papel = _atual(request)
     contas = mercadolivre.contas()
     if not contas:
@@ -2054,23 +2081,31 @@ def vendas(request: Request, de: str = "", ate: str = "", loja: str = "",
     if fluxo:
         registros = [r for r in registros if str(fm.get(_pk(r[0]), "")) == fluxo]
 
-    # data de envio ("enviar ate") - buscada em paralelo (com cache) do ML
-    envio_map: dict = {}
+    # envio (data 'enviar ate' + situacao entregue/enviado/...) - em paralelo com cache
+    envio_map: dict = {}   # pk -> {"enviar_ate":..., "status":...}
     acc_by_uid = {str(a["user_id"]): a for a in contas}
 
     def _fetch_env(reg):
         try:
             return (_pk(reg[0]),
-                    mercadolivre.enviar_ate_de(reg[0], user_id=reg[1], token=acc_by_uid.get(reg[1])))
+                    mercadolivre.resumo_envio_de(reg[0], user_id=reg[1], token=acc_by_uid.get(reg[1])))
         except Exception:
-            return (_pk(reg[0]), "")
+            return (_pk(reg[0]), {})
+
+    # se precisa ordenar por envio ou filtrar por situacao, busca o envio de um
+    # conjunto limitado (mais recentes) para nao ficar lento com milhares
+    if ordenar == "envio" or envio:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=12) as ex:
+            for pk_, res in ex.map(_fetch_env, registros[:150]):
+                envio_map[pk_] = res
+
+    if envio:
+        grupo = _ENVIO_GRUPO.get(envio, set())
+        registros = [r for r in registros
+                     if envio_map.get(_pk(r[0]), {}).get("status", "") in grupo]
 
     if ordenar == "envio":
-        alvo = registros[:150]  # busca so nos mais recentes p/ nao ficar lento
-        with concurrent.futures.ThreadPoolExecutor(max_workers=12) as ex:
-            for pk_, val in ex.map(_fetch_env, alvo):
-                envio_map[pk_] = val
-        registros.sort(key=lambda r: envio_map.get(_pk(r[0]), "") or "9999")
+        registros.sort(key=lambda r: envio_map.get(_pk(r[0]), {}).get("enviar_ate", "") or "9999")
     else:
         registros.sort(key=lambda r: str(r[0].get("date_created") or ""), reverse=True)
 
@@ -2106,12 +2141,16 @@ def vendas(request: Request, de: str = "", ate: str = "", loja: str = "",
         link_msg = f"/conversa?pack={pk}&conta={uid}&buyer={comp_id}"
         pack_disp = (f" &middot; <b>pacote {o.get('pack_id')}</b>"
                      if o.get("pack_id") and str(o.get("pack_id")) != str(o.get("id")) else "")
-        env_ate = envio_map.get(pk, "")
+        res_env = envio_map.get(pk) or {}
+        env_ate = res_env.get("enviar_ate", "")
+        st_env = res_env.get("status", "")
         env_html = ""
         if env_ate:
             cor_env = "#A32D2D" if env_ate[:10] < hoje.isoformat() else "#A15C00"
             env_html = (f" &middot; <span style='color:{cor_env};font-weight:600'>"
                         f"<i class='ti ti-truck'></i> enviar ate {_data_br(env_ate)}</span>")
+        env_badge = _badge_envio(st_env)
+        env_badge_html = f"<div style='margin-top:4px'>{env_badge}</div>" if env_badge else ""
         at_atual = am.get(pk, "")
         opt_at = "<option value=''>&mdash; atendente &mdash;</option>" + "".join(
             f"<option value='{_esc(n)}' {'selected' if n == at_atual else ''}>{_esc(n)}</option>"
@@ -2135,7 +2174,8 @@ def vendas(request: Request, de: str = "", ate: str = "", loja: str = "",
             f" &middot; {_data_br(o.get('date_created'))}{env_html}</div></a>"
             "<div style='text-align:right;flex:none'>"
             f"<div style='font-weight:600'>{_moeda(venda)}</div>"
-            f"<div style='margin-top:4px'>{_badge_status(o.get('status'))}</div></div>"
+            f"<div style='margin-top:4px'>{_badge_status(o.get('status'))}</div>"
+            f"{env_badge_html}</div>"
             "</div>"
             "<div style='display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px;"
             "padding-top:10px;border-top:1px solid #f0f1f4'>"
@@ -2168,6 +2208,10 @@ def vendas(request: Request, de: str = "", ate: str = "", loja: str = "",
     opt_fx_f = "<option value=''>Todos fluxos</option>" + "".join(
         f"<option value='{f['id']}' {'selected' if fluxo == str(f['id']) else ''}>{_esc(f['nome'])}</option>"
         for f in flx)
+    opt_env_f = "<option value=''>Toda situacao</option>" + "".join(
+        f"<option value='{v}' {'selected' if envio == v else ''}>{lbl}</option>"
+        for v, lbl in [("a_enviar", "A enviar"), ("enviado", "Enviado"),
+                       ("entregue", "Entregue"), ("nao_entregue", "Nao entregue")])
     filtros = (
         "<form method='get' action='/vendas' "
         "style='display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin:6px 0 14px'>"
@@ -2181,6 +2225,8 @@ def vendas(request: Request, de: str = "", ate: str = "", loja: str = "",
         f"<select name='atend' style='{campo}'>{opt_at_f}</select></div>"
         f"<div><div class='muted' style='font-size:12px'>Fluxo</div>"
         f"<select name='fluxo' style='{campo}'>{opt_fx_f}</select></div>"
+        f"<div><div class='muted' style='font-size:12px'>Situacao</div>"
+        f"<select name='envio' style='{campo}'>{opt_env_f}</select></div>"
         f"<div><div class='muted' style='font-size:12px'>Ordenar</div>"
         f"<select name='ordenar' style='{campo}'><option value=''>Recentes</option>"
         f"<option value='envio' {'selected' if ordenar == 'envio' else ''}>Enviar ate (prazo)</option>"
@@ -2193,7 +2239,8 @@ def vendas(request: Request, de: str = "", ate: str = "", loja: str = "",
     # paginacao (some quando esta buscando)
     nav = ""
     if not termo:
-        base = f"/vendas?de={de}&ate={ate}&loja={loja}&atend={atend}&fluxo={fluxo}&ordenar={ordenar}"
+        base = (f"/vendas?de={de}&ate={ate}&loja={loja}&atend={atend}&fluxo={fluxo}"
+                f"&ordenar={ordenar}&envio={envio}")
         partes = []
         if pag > 1:
             partes.append(f"<a class='btn ghost' href='{base}&pag={pag - 1}'>&larr; Recentes</a>")
@@ -2206,7 +2253,7 @@ def vendas(request: Request, de: str = "", ate: str = "", loja: str = "",
     ger_fluxos = ("<a class='muted' href='/fluxos' style='font-size:13px'>"
                   "<i class='ti ti-settings'></i> gerenciar fluxos</a>" if papel == "admin" else "")
     atualizar_href = (f"/vendas?de={de}&ate={ate}&loja={loja}&atend={atend}&fluxo={fluxo}"
-                      f"&ordenar={ordenar}&q={q}&atualizar=1")
+                      f"&ordenar={ordenar}&envio={envio}&q={q}&atualizar=1")
     corpo = (
         "<link rel='stylesheet' href='https://cdn.jsdelivr.net/npm/"
         "@tabler/icons-webfont@3.11.0/dist/tabler-icons.min.css'>"
@@ -2366,6 +2413,7 @@ def conversa(request: Request, pack: str = "", conta: str = "", buyer: str = "")
         f"<span><i class='ti ti-cash'></i> R$ {total}</span>"
         + (f"<span style='color:#A15C00;font-weight:500'><i class='ti ti-truck'></i> "
            f"Enviar ate {_data_br(env.get('enviar_ate'))}</span>" if env.get("enviar_ate") else "")
+        + (f"<span>{_badge_envio(env.get('envio_status'))}</span>" if env.get("envio_status") else "")
         + f"<span><i class='ti ti-hash'></i> {cod_html}</span>"
         f"<a href='/imprimir?pack={pack}&conta={uid}' target='_blank' "
         "style='color:#534AB7;font-weight:500'><i class='ti ti-printer'></i> Imprimir pedido</a></div>"

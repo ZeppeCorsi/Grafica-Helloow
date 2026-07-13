@@ -356,20 +356,26 @@ def dados_envio(order: dict, user_id: str | None = None,
     }
 
 
-def enviar_ate_de(order: dict, user_id: str | None = None,
-                  token: dict | None = None) -> str:
-    """Data 'enviar ate' (limite de despacho) do pedido, com cache (nao muda)."""
+def resumo_envio_de(order: dict, user_id: str | None = None,
+                    token: dict | None = None) -> dict:
+    """{'enviar_ate':..., 'status':...} do envio do pedido, com cache (1 chamada)."""
     oid = str(order.get("id") or "")
     agora = time.time()
     c = _cache_envio.get(oid)
     if c and agora - c[0] < _TTL_ENVIO:
         return c[1]
     try:
-        val = (dados_envio(order, user_id=user_id, token=token) or {}).get("enviar_ate", "")
+        d = dados_envio(order, user_id=user_id, token=token) or {}
+        res = {"enviar_ate": d.get("enviar_ate", ""), "status": d.get("envio_status", "")}
     except (RuntimeError, httpx.HTTPError):
-        val = ""
-    _cache_envio[oid] = (agora, val)
-    return val
+        res = {"enviar_ate": "", "status": ""}
+    _cache_envio[oid] = (agora, res)
+    return res
+
+
+def enviar_ate_de(order: dict, user_id: str | None = None,
+                  token: dict | None = None) -> str:
+    return resumo_envio_de(order, user_id=user_id, token=token).get("enviar_ate", "")
 
 
 def pedido_do_pack(pack_id: str, user_id: str | None = None,
