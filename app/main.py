@@ -2076,7 +2076,9 @@ def vendas(request: Request, de: str = "", ate: str = "", loja: str = "",
             return termo in cod or termo in pack or termo in comp or termo in tit
         registros = [r for r in registros if _bate(r)]
 
-    if atend:
+    if atend == "__none__":  # nao direcionados: sem atendente atribuido
+        registros = [r for r in registros if not am.get(_pk(r[0]))]
+    elif atend:
         registros = [r for r in registros if am.get(_pk(r[0]), "") == atend]
     if fluxo:
         registros = [r for r in registros if str(fm.get(_pk(r[0]), "")) == fluxo]
@@ -2203,8 +2205,12 @@ def vendas(request: Request, de: str = "", ate: str = "", loja: str = "",
     opt_loja = "<option value=''>Todas as lojas</option>" + "".join(
         f"<option value='{a['user_id']}' {'selected' if loja == str(a['user_id']) else ''}>"
         f"{mercadolivre.nome_exibicao(a)}</option>" for a in contas)
-    opt_at_f = "<option value=''>Todos atendentes</option>" + "".join(
-        f"<option value='{_esc(n)}' {'selected' if atend == n else ''}>{_esc(n)}</option>" for n in equipe)
+    opt_at_f = ("<option value=''>Todos atendentes</option>"
+                f"<option value='__none__' {'selected' if atend == '__none__' else ''}>"
+                "Sem atendente (nao direcionados)</option>"
+                + "".join(
+                    f"<option value='{_esc(n)}' {'selected' if atend == n else ''}>{_esc(n)}</option>"
+                    for n in equipe))
     opt_fx_f = "<option value=''>Todos fluxos</option>" + "".join(
         f"<option value='{f['id']}' {'selected' if fluxo == str(f['id']) else ''}>{_esc(f['nome'])}</option>"
         for f in flx)
