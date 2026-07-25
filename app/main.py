@@ -2208,7 +2208,7 @@ def vendas(request: Request, de: str = "", ate: str = "", loja: str = "",
         f"{mercadolivre.nome_exibicao(a)}</option>" for a in contas)
     opt_at_f = ("<option value=''>Todos atendentes</option>"
                 f"<option value='__none__' {'selected' if atend == '__none__' else ''}>"
-                "Sem atendente (nao direcionados)</option>"
+                "Aberto (sem atendente)</option>"
                 + "".join(
                     f"<option value='{_esc(n)}' {'selected' if atend == n else ''}>{_esc(n)}</option>"
                     for n in equipe))
@@ -2229,9 +2229,9 @@ def vendas(request: Request, de: str = "", ate: str = "", loja: str = "",
         f"<div><div class='muted' style='font-size:12px'>Loja</div>"
         f"<select name='loja' style='{campo}'>{opt_loja}</select></div>"
         f"<div><div class='muted' style='font-size:12px'>Atendente</div>"
-        f"<select name='atend' style='{campo}'>{opt_at_f}</select></div>"
+        f"<select name='atend' onchange='this.form.submit()' style='{campo}'>{opt_at_f}</select></div>"
         f"<div><div class='muted' style='font-size:12px'>Fluxo</div>"
-        f"<select name='fluxo' style='{campo}'>{opt_fx_f}</select></div>"
+        f"<select name='fluxo' onchange='this.form.submit()' style='{campo}'>{opt_fx_f}</select></div>"
         f"<div><div class='muted' style='font-size:12px'>Situacao</div>"
         f"<select name='envio' style='{campo}'>{opt_env_f}</select></div>"
         f"<div><div class='muted' style='font-size:12px'>Ordenar</div>"
