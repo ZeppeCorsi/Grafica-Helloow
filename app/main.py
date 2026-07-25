@@ -91,15 +91,16 @@ def entrar_form():
 
 @app.post("/entrar")
 def entrar(request: Request, usuario: str = Form(...), senha: str = Form(...)):
-    # 1) usuarios da equipe (banco)
-    u = usuarios.autenticar(usuario.strip(), senha)
-    if u:
-        request.session.update({"auth": True, "nome": u["nome"], "papel": u["papel"]})
-        return RedirectResponse("/", status_code=303)
-    # 2) usuario mestre (env) - sempre admin, rede de seguranca
+    # 1) usuario mestre (env) - SEMPRE admin e com PRIORIDADE, para nunca ficar
+    #    trancado para fora mesmo que exista um usuario de equipe com o mesmo login.
     if (config.APP_PASSWORD and secrets.compare_digest(usuario.strip(), config.APP_USER)
             and secrets.compare_digest(senha, config.APP_PASSWORD)):
         request.session.update({"auth": True, "nome": config.APP_USER, "papel": "admin"})
+        return RedirectResponse("/", status_code=303)
+    # 2) usuarios da equipe (banco)
+    u = usuarios.autenticar(usuario.strip(), senha)
+    if u:
+        request.session.update({"auth": True, "nome": u["nome"], "papel": u["papel"]})
         return RedirectResponse("/", status_code=303)
     return _pagina_login("Usuario ou senha incorretos.")
 
