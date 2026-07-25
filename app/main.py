@@ -12,6 +12,7 @@ from datetime import date, datetime, timedelta
 
 import httpx
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
@@ -2128,6 +2129,7 @@ def vendas(request: Request, de: str = "", ate: str = "", loja: str = "",
     apel = {str(a["user_id"]): mercadolivre.nome_exibicao(a) for a in contas}
     voltar = "/vendas" + ("?" + request.url.query if request.url.query else "")
     voltar = voltar.replace("&atualizar=1", "")  # nao repetir o refresh ao voltar
+    voltar_enc = quote(voltar, safe="")  # para levar os filtros ate a conversa e voltar
     selstyle = ("font-size:12px;padding:5px 6px;border:1px solid #d7dade;border-radius:6px;"
                 "background:#fff;max-width:160px")
 
@@ -2141,7 +2143,7 @@ def vendas(request: Request, de: str = "", ate: str = "", loja: str = "",
         venda = float(o.get("total_amount") or 0)
         sino = ("<i class='ti ti-bell' style='color:#C77700' "
                 "title='Mensagem nao respondida'></i> " if pk in aguardando else "")
-        link_msg = f"/conversa?pack={pk}&conta={uid}&buyer={comp_id}"
+        link_msg = f"/conversa?pack={pk}&conta={uid}&buyer={comp_id}&voltar={voltar_enc}"
         pack_disp = (f" &middot; <b>pacote {o.get('pack_id')}</b>"
                      if o.get("pack_id") and str(o.get("pack_id")) != str(o.get("id")) else "")
         res_env = envio_map.get(pk) or {}
@@ -2363,7 +2365,8 @@ def fluxos_excluir(request: Request, id: int = Form(...)):
 
 
 @app.get("/conversa", response_class=HTMLResponse)
-def conversa(request: Request, pack: str = "", conta: str = "", buyer: str = ""):
+def conversa(request: Request, pack: str = "", conta: str = "", buyer: str = "",
+             voltar: str = ""):
     """Conversa focada de UM pedido (rapida): abre direto do pedido, sem carregar
     a caixa de entrada inteira. Aceita codigo de pedido ou de pacote."""
     nome, papel = _atual(request)
@@ -2409,7 +2412,7 @@ def conversa(request: Request, pack: str = "", conta: str = "", buyer: str = "")
     corpo = (
         "<link rel='stylesheet' href='https://cdn.jsdelivr.net/npm/"
         "@tabler/icons-webfont@3.11.0/dist/tabler-icons.min.css'>"
-        "<p><a href='/vendas'>&larr; voltar aos pedidos</a></p>"
+        f"<p><a href='{_esc(voltar) if voltar else '/vendas'}'>&larr; voltar aos pedidos</a></p>"
         "<div class='card' style='padding:0;overflow:hidden;max-width:760px'>"
         "<div class='dhead'>"
         f"<div class='av' style='background:#FFF7CC;color:#7a6a00'>{comprador[:2].upper()}</div>"
@@ -2429,6 +2432,7 @@ def conversa(request: Request, pack: str = "", conta: str = "", buyer: str = "")
         f"<input type='hidden' name='pack' value='{pack}'/>"
         f"<input type='hidden' name='conta' value='{uid}'/>"
         f"<input type='hidden' name='buyer' value='{comp_id}'/>"
+        f"<input type='hidden' name='voltar' value='{_esc(voltar)}'/>"
         "<input name='texto' placeholder='Responder o comprador...' required/>"
         "<button class='btn ml' type='submit'>Enviar</button></form>"
         "</div>"
@@ -2439,14 +2443,16 @@ def conversa(request: Request, pack: str = "", conta: str = "", buyer: str = "")
 
 @app.post("/conversa/responder")
 def conversa_responder(request: Request, pack: str = Form(...), conta: str = Form(""),
-                       buyer: str = Form(""), texto: str = Form(...)):
+                       buyer: str = Form(""), texto: str = Form(...), voltar: str = Form("")):
     try:
         mercadolivre.enviar_mensagem(pack, buyer, texto, user_id=conta or None)
         nome, _ = _atual(request)
         usuarios.registrar(nome or "?", "conversa_responder", pack)
     except (RuntimeError, httpx.HTTPStatusError):
         pass
-    return RedirectResponse(f"/conversa?pack={pack}&conta={conta}&buyer={buyer}", status_code=303)
+    v = f"&voltar={quote(voltar, safe='')}" if voltar else ""
+    return RedirectResponse(f"/conversa?pack={pack}&conta={conta}&buyer={buyer}{v}",
+                            status_code=303)
 
 
 @app.get("/imprimir", response_class=HTMLResponse)
