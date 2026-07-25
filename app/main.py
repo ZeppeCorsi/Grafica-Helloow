@@ -201,8 +201,7 @@ def _pagina(corpo: str, full: bool = False, ativo: str = "",
         "<div class='links' style='display:flex;align-items:center'>"
         + lk("/inbox", "Caixa de entrada", "inbox")
         + lk("/perguntas", "Perguntas", "perguntas")
-        + lk("/vendas", "Pedidos", "vendas")
-        + lk("/pedidos", "Pedidos (Bling)", "pedidos")
+        + lk("/vendas?atend=__none__", "Pedidos", "vendas")
         + admin_links
         + user_chip
         + ("<a href='/sair'>Sair</a>" if config.APP_PASSWORD else "")
