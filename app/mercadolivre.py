@@ -366,9 +366,10 @@ def resumo_envio_de(order: dict, user_id: str | None = None,
         return c[1]
     try:
         d = dados_envio(order, user_id=user_id, token=token) or {}
-        res = {"enviar_ate": d.get("enviar_ate", ""), "status": d.get("envio_status", "")}
+        res = {"enviar_ate": d.get("enviar_ate", ""), "status": d.get("envio_status", ""),
+               "nome": d.get("nome", "")}
     except (RuntimeError, httpx.HTTPError):
-        res = {"enviar_ate": "", "status": ""}
+        res = {"enviar_ate": "", "status": "", "nome": ""}
     _cache_envio[oid] = (agora, res)
     return res
 

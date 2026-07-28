@@ -2139,8 +2139,9 @@ def vendas(request: Request, de: str = "", ate: str = "", loja: str = "",
     for o, uid, aguardando in pagina_itens:
         pk = _pk(o)
         _b = o.get("buyer") or {}
+        _rec = (envio_map.get(pk) or {}).get("nome", "")  # receiver_name (nome do envio)
         _nome_real = f"{_b.get('first_name', '')} {_b.get('last_name', '')}".strip()
-        comprador = _nome_real or _b.get("nickname") or "-"
+        comprador = _rec or _nome_real or _b.get("nickname") or "-"
         comp_id = str(_b.get("id", ""))
         its = o.get("order_items") or []
         titulo = (its[0].get("item") or {}).get("title", "-") if its else "-"
