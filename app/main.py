@@ -7,6 +7,7 @@ Depois abra http://localhost:8000 no navegador.
 import calendar
 import concurrent.futures
 import io
+import json
 import secrets
 from datetime import date, datetime, timedelta
 
@@ -18,7 +19,7 @@ from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import (bling, categorias, config, financeiro, fluxos, ia_consumo,
+from . import (backup, bling, categorias, config, financeiro, fluxos, ia_consumo,
                mercadolivre, produtos, store, usuarios)
 
 app = FastAPI(title="Hub de atendimento")
@@ -192,7 +193,8 @@ def _pagina(corpo: str, full: bool = False, ativo: str = "",
                        + lk("/resultado", "Resultado", "resultado")
                        + lk("/financeiro", "Financeiro", "financeiro")
                        + lk("/usuarios", "Equipe", "usuarios")
-                       + lk("/desempenho", "Desempenho", "desempenho"))
+                       + lk("/desempenho", "Desempenho", "desempenho")
+                       + lk("/backup", "Backup", "backup"))
     user_chip = (f"<span class='muted' style='font-size:12px;margin-right:4px'>"
                  f"<i class='ti ti-user'></i> {nome}</span>" if nome else "")
     nav = (
@@ -2813,5 +2815,67 @@ async def whatsapp_upload(request: Request, arquivo: UploadFile = File(...)):
             "origem": arquivo.filename or "",
         })
     return RedirectResponse("/whatsapp", status_code=303)
+
+
+# --------------------------------------------------------------------------- #
+# Backup: exporta os dados do app num JSON e restaura de volta (admin)
+# --------------------------------------------------------------------------- #
+@app.get("/backup", response_class=HTMLResponse)
+def backup_page(request: Request, ok: str = ""):
+    nome, papel = _atual(request)
+    if papel != "admin":
+        return RedirectResponse("/inbox")
+    aviso = ("<div class='card' style='background:#E1F5EE;border-color:#9fdcc7'>"
+             "Backup restaurado com sucesso.</div>" if ok == "1" else "")
+    corpo = (
+        "<h1>Backup</h1>"
+        "<p class='muted'>Baixe uma copia dos seus dados (custos de produtos, fluxos, "
+        "atendentes por pedido, usuarios, categorias, custos fixos, consumo de IA e "
+        "configuracoes). <b>Nao inclui</b> os tokens do Mercado Livre/Bling (recuperaveis "
+        "reconectando as contas).</p>"
+        f"{aviso}"
+        "<div class='card'><h3 style='margin-top:0'>&#11015; Exportar</h3>"
+        "<p class='muted' style='margin-top:-4px'>Baixa um arquivo JSON com todos os dados. "
+        "Guarde no seu computador ou no Drive.</p>"
+        "<a class='btn' href='/backup/exportar'>Baixar backup (JSON)</a></div>"
+        "<div class='card'><h3 style='margin-top:0'>&#11014; Restaurar</h3>"
+        "<p class='muted' style='margin-top:-4px'>Suba um arquivo de backup para repor os dados. "
+        "Ele <b>atualiza/insere</b> por cima do que existe (nao apaga o resto).</p>"
+        "<form method='post' action='/backup/restaurar' enctype='multipart/form-data' "
+        "style='display:flex;gap:8px;align-items:center;flex-wrap:wrap' "
+        "onsubmit=\"return confirm('Restaurar este backup por cima dos dados atuais?')\">"
+        "<input type='file' name='arquivo' accept='.json' required/>"
+        "<button class='btn ghost'>Restaurar backup</button></form></div>"
+        "<p class='muted' style='font-size:12px'>Dica: o banco (Neon) tambem tem restauracao "
+        "automatica por tempo (Point-in-Time), e o codigo fica no GitHub &mdash; este backup e "
+        "uma copia extra na sua mao.</p>"
+    )
+    return _pagina(corpo, ativo="backup", papel=papel, nome=nome)
+
+
+@app.get("/backup/exportar")
+def backup_exportar(request: Request):
+    if _atual(request)[1] != "admin":
+        return RedirectResponse("/inbox")
+    dump = backup.exportar()
+    conteudo = json.dumps(dump, ensure_ascii=False, default=str, indent=2)
+    fn = f"zappehub-backup-{date.today().isoformat()}.json"
+    return Response(conteudo, media_type="application/json",
+                    headers={"Content-Disposition": f"attachment; filename=\"{fn}\""})
+
+
+@app.post("/backup/restaurar")
+async def backup_restaurar(request: Request, arquivo: UploadFile = File(...)):
+    if _atual(request)[1] != "admin":
+        return RedirectResponse("/inbox")
+    try:
+        dump = json.loads((await arquivo.read()).decode("utf-8"))
+        backup.importar(dump)
+    except Exception:
+        return _pagina("<h1>Backup</h1><div class='card' style='background:#FCEBEB;"
+                       "border-color:#f2b8b8'>Arquivo de backup invalido.</div>"
+                       "<p><a href='/backup'>&larr; voltar</a></p>", ativo="backup",
+                       papel="admin", nome=_atual(request)[0])
+    return RedirectResponse("/backup?ok=1", status_code=303)
 
 
