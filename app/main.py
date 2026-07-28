@@ -2069,9 +2069,12 @@ def vendas(request: Request, de: str = "", ate: str = "", loja: str = "",
     if termo:
         def _bate(reg):
             o = reg[0]
-            cod = str(o.get("id") or "")
-            pack = str(o.get("pack_id") or "")  # cliente costuma mandar o codigo do pacote
-            comp = ((o.get("buyer") or {}).get("nickname") or "").lower()
+            cod = str(o.get("id") or "")          # numero do pedido/venda
+            pack = str(o.get("pack_id") or "")    # codigo do pacote (o que o cliente manda)
+            b = o.get("buyer") or {}
+            # apelido + nome real (quando o ML fornece first_name/last_name)
+            comp = (f"{b.get('nickname', '')} {b.get('first_name', '')} "
+                    f"{b.get('last_name', '')}").lower()
             its = o.get("order_items") or []
             tit = ((its[0].get("item") or {}).get("title") or "").lower() if its else ""
             return termo in cod or termo in pack or termo in comp or termo in tit
@@ -2135,8 +2138,10 @@ def vendas(request: Request, de: str = "", ate: str = "", loja: str = "",
     linhas = ""
     for o, uid, aguardando in pagina_itens:
         pk = _pk(o)
-        comprador = (o.get("buyer") or {}).get("nickname", "-")
-        comp_id = str((o.get("buyer") or {}).get("id", ""))
+        _b = o.get("buyer") or {}
+        _nome_real = f"{_b.get('first_name', '')} {_b.get('last_name', '')}".strip()
+        comprador = _nome_real or _b.get("nickname") or "-"
+        comp_id = str(_b.get("id", ""))
         its = o.get("order_items") or []
         titulo = (its[0].get("item") or {}).get("title", "-") if its else "-"
         venda = float(o.get("total_amount") or 0)
@@ -2240,7 +2245,7 @@ def vendas(request: Request, de: str = "", ate: str = "", loja: str = "",
         f"<option value='envio' {'selected' if ordenar == 'envio' else ''}>Enviar ate (prazo)</option>"
         "</select></div>"
         "<div style='flex:1;min-width:140px'><div class='muted' style='font-size:12px'>Busca</div>"
-        f"<input name='q' value='{q}' placeholder='codigo, cliente ou produto' style='width:100%;{campo}'/></div>"
+        f"<input name='q' value='{q}' placeholder='nº da venda, nome do cliente ou produto' style='width:100%;{campo}'/></div>"
         "<button class='btn'>Filtrar</button></form>"
     )
 
