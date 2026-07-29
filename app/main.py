@@ -6,6 +6,7 @@ Depois abra http://localhost:8000 no navegador.
 """
 import calendar
 import concurrent.futures
+import csv
 import io
 import json
 import secrets
@@ -1971,7 +1972,12 @@ def produtos_page(request: Request, conta: str = "", pend: str = ""):
           "</script>")
 
     corpo = (
+        "<link rel='stylesheet' href='https://cdn.jsdelivr.net/npm/"
+        "@tabler/icons-webfont@3.11.0/dist/tabler-icons.min.css'>"
+        "<div style='display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap'>"
         "<h1 style='margin-bottom:4px'>Produtos</h1>"
+        "<a class='btn ghost' href='/produtos/planilha'><i class='ti ti-table'></i> "
+        "Gerar planilha</a></div>"
         "<p class='muted'>Preencha o custo de producao de cada anuncio. Ele entra automaticamente "
         "no calculo de margem (Resultado e Financeiro). Quem nao tiver custo usa o % configurado.</p>"
         # filtros ficam FORA do form de salvar (formulario dentro de formulario quebra o envio)
@@ -2000,6 +2006,42 @@ async def produtos_salvar(request: Request):
     if mapa:
         produtos.definir_varios(mapa)
     return RedirectResponse("/produtos", status_code=303)
+
+
+@app.get("/produtos/planilha")
+def produtos_planilha(request: Request):
+    """Baixa uma planilha (CSV) de todos os anuncios com preco, custo e margem."""
+    if _atual(request)[1] != "admin":
+        return RedirectResponse("/inbox")
+    custos = produtos.custos()
+    buf = io.StringIO()
+    buf.write("﻿")  # BOM: Excel abre com acentos certos
+    w = csv.writer(buf, delimiter=";")
+    w.writerow(["Loja", "Produto", "SKU", "MLB", "Status", "Preco", "Custo",
+                "Margem bruta (%)"])
+
+    def _br(v):
+        return ("%.2f" % v).replace(".", ",") if v is not None else ""
+
+    for acc in mercadolivre.contas():
+        uid = str(acc["user_id"])
+        loja = mercadolivre.nome_exibicao(acc)
+        try:
+            itens = mercadolivre.listar_produtos(user_id=uid, token=acc)
+        except (RuntimeError, httpx.HTTPError):
+            itens = []
+        for p in itens:
+            iid = str(p.get("id") or "")
+            custo = custos.get(iid)
+            preco = float(p.get("price") or 0)
+            st = p.get("status") or ""
+            rot = _STATUS_PROD.get(st, (st,))[0]
+            margem = f"{(preco - custo) / preco * 100:.0f}" if (custo is not None and preco) else ""
+            w.writerow([loja, p.get("title") or "", p.get("seller_custom_field") or "",
+                        iid, rot, _br(preco), _br(custo), margem])
+    fn = f"produtos-{date.today().isoformat()}.csv"
+    return Response(buf.getvalue(), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": f"attachment; filename=\"{fn}\""})
 
 
 @app.get("/produtos/diag", response_class=HTMLResponse)
