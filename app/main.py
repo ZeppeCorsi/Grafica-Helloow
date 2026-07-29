@@ -2081,13 +2081,26 @@ def vendas(request: Request, de: str = "", ate: str = "", loja: str = "",
             tit = ((its[0].get("item") or {}).get("title") or "").lower() if its else ""
             return termo in cod or termo in pack or termo in comp or termo in tit
         registros = [r for r in registros if _bate(r)]
-
-    if atend == "__none__":  # nao direcionados: sem atendente atribuido
-        registros = [r for r in registros if not am.get(_pk(r[0]))]
-    elif atend:
-        registros = [r for r in registros if am.get(_pk(r[0]), "") == atend]
-    if fluxo:
-        registros = [r for r in registros if str(fm.get(_pk(r[0]), "")) == fluxo]
+        # busca por um codigo (pedido OU pacote) que nao esta na lista carregada
+        # (ex.: venda fora dos 30 dias): busca direto no ML em qualquer conta.
+        q_cod = q.strip()
+        if q_cod.isdigit() and not any(
+                str(r[0].get("id")) == q_cod or str(r[0].get("pack_id") or "") == q_cod
+                for r in registros):
+            try:
+                o_dir, uid_dir = mercadolivre.buscar_pedido_cod(q_cod, contas)
+            except Exception:
+                o_dir = None
+            if o_dir:
+                registros = [(o_dir, str(uid_dir), set())] + registros
+    else:
+        # filtros de atendente/fluxo so quando NAO ha busca (a busca tem prioridade)
+        if atend == "__none__":  # nao direcionados: sem atendente atribuido
+            registros = [r for r in registros if not am.get(_pk(r[0]))]
+        elif atend:
+            registros = [r for r in registros if am.get(_pk(r[0]), "") == atend]
+        if fluxo:
+            registros = [r for r in registros if str(fm.get(_pk(r[0]), "")) == fluxo]
 
     # envio (data 'enviar ate' + situacao entregue/enviado/...) - em paralelo com cache
     envio_map: dict = {}   # pk -> {"enviar_ate":..., "status":...}
@@ -2102,17 +2115,18 @@ def vendas(request: Request, de: str = "", ate: str = "", loja: str = "",
 
     # se precisa ordenar por envio ou filtrar por situacao, busca o envio de um
     # conjunto limitado (mais recentes) para nao ficar lento com milhares
-    if ordenar == "envio" or envio:
+    # (a busca tem prioridade: quando ha termo, nao aplicamos filtro de situacao)
+    if (ordenar == "envio" or envio) and not termo:
         with concurrent.futures.ThreadPoolExecutor(max_workers=12) as ex:
             for pk_, res in ex.map(_fetch_env, registros[:150]):
                 envio_map[pk_] = res
 
-    if envio:
+    if envio and not termo:
         grupo = _ENVIO_GRUPO.get(envio, set())
         registros = [r for r in registros
                      if envio_map.get(_pk(r[0]), {}).get("status", "") in grupo]
 
-    if ordenar == "envio":
+    if ordenar == "envio" and not termo:
         registros.sort(key=lambda r: envio_map.get(_pk(r[0]), {}).get("enviar_ate", "") or "9999")
     else:
         registros.sort(key=lambda r: str(r[0].get("date_created") or ""), reverse=True)
