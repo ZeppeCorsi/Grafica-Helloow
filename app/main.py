@@ -1333,11 +1333,44 @@ def usuarios_excluir(request: Request, id: int = Form(...)):
 
 
 @app.get("/desempenho", response_class=HTMLResponse)
-def desempenho(request: Request):
+def desempenho(request: Request, periodo: str = "tudo", de: str = "", ate: str = ""):
     nome, papel = _atual(request)
     if papel != "admin":
         return RedirectResponse("/inbox")
-    res = usuarios.resumo()
+    hoje = date.today()
+    if periodo == "hoje":
+        d_de = d_ate = hoje.isoformat()
+    elif periodo == "semana":
+        d_de, d_ate = (hoje - timedelta(days=6)).isoformat(), hoje.isoformat()
+    elif periodo == "mes":
+        d_de, d_ate = hoje.replace(day=1).isoformat(), hoje.isoformat()
+    elif periodo == "custom" and de and ate:
+        d_de, d_ate = de, ate
+    else:
+        periodo, d_de, d_ate = "tudo", None, None
+
+    def _pill(label, val):
+        on = ("background:#2D3277;color:#fff" if periodo == val
+              else "background:#fff;border:1px solid #d7dade;color:#333")
+        return (f"<a href='/desempenho?periodo={val}' style='padding:7px 14px;border-radius:8px;"
+                f"font-size:13px;text-decoration:none;{on}'>{label}</a>")
+
+    filtro = (
+        "<div style='display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:6px 0 6px'>"
+        + _pill("Hoje", "hoje") + _pill("7 dias", "semana") + _pill("Este mes", "mes")
+        + _pill("Tudo", "tudo")
+        + "<form method='get' action='/desempenho' style='display:flex;gap:6px;align-items:center;"
+        "margin-left:6px'><input type='hidden' name='periodo' value='custom'/>"
+        f"<input type='date' name='de' value='{de or (d_de or '')}' "
+        "style='padding:7px;border:1px solid #d7dade;border-radius:8px'/>"
+        f"<input type='date' name='ate' value='{ate or (d_ate or '')}' "
+        "style='padding:7px;border:1px solid #d7dade;border-radius:8px'/>"
+        "<button class='btn ghost' style='padding:6px 12px'>Aplicar</button></form></div>"
+        + (f"<p class='muted' style='font-size:13px'>Periodo: {_data_br(d_de)} a {_data_br(d_ate)}</p>"
+           if d_de else "<p class='muted' style='font-size:13px'>Todo o periodo.</p>")
+    )
+
+    res = usuarios.resumo(d_de, d_ate)
     if res:
         cards = "<div style='display:flex;gap:10px;flex-wrap:wrap;margin:10px 0 22px'>"
         for r in res:
@@ -1350,7 +1383,7 @@ def desempenho(request: Request):
         cards = "<p class='muted'>Sem atividade registrada ainda.</p>"
 
     linhas = ""
-    for l in usuarios.listar_log(200):
+    for l in usuarios.listar_log(200, d_de, d_ate):
         try:
             quando = l["ts"].strftime("%d/%m/%Y %H:%M")
         except Exception:
@@ -1362,6 +1395,7 @@ def desempenho(request: Request):
 
     corpo = (
         "<h1>Desempenho</h1>"
+        f"{filtro}"
         "<h3>Atendimentos por pessoa</h3>"
         f"{cards}"
         "<h3>Historico &mdash; quem atendeu o que</h3>"

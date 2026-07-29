@@ -89,17 +89,28 @@ if DATABASE_URL:
         except Exception:
             pass
 
-    def listar_log(limite: int = 200) -> list[dict]:
+    def listar_log(limite: int = 200, de: str | None = None,
+                   ate: str | None = None) -> list[dict]:
         with _conn() as c, c.cursor() as cur:
-            cur.execute("SELECT ts, usuario, acao, alvo FROM log_atividade "
-                        "ORDER BY ts DESC LIMIT %s", (limite,))
+            if de and ate:
+                cur.execute("SELECT ts, usuario, acao, alvo FROM log_atividade "
+                            "WHERE ts::date BETWEEN %s AND %s ORDER BY ts DESC LIMIT %s",
+                            (de, ate, limite))
+            else:
+                cur.execute("SELECT ts, usuario, acao, alvo FROM log_atividade "
+                            "ORDER BY ts DESC LIMIT %s", (limite,))
             return [{"ts": r[0], "usuario": r[1], "acao": r[2], "alvo": r[3]}
                     for r in cur.fetchall()]
 
-    def resumo() -> list[dict]:
+    def resumo(de: str | None = None, ate: str | None = None) -> list[dict]:
         with _conn() as c, c.cursor() as cur:
-            cur.execute("SELECT usuario, COUNT(*) FROM log_atividade GROUP BY usuario "
-                        "ORDER BY COUNT(*) DESC")
+            if de and ate:
+                cur.execute("SELECT usuario, COUNT(*) FROM log_atividade "
+                            "WHERE ts::date BETWEEN %s AND %s GROUP BY usuario "
+                            "ORDER BY COUNT(*) DESC", (de, ate))
+            else:
+                cur.execute("SELECT usuario, COUNT(*) FROM log_atividade GROUP BY usuario "
+                            "ORDER BY COUNT(*) DESC")
             return [{"usuario": r[0], "total": r[1]} for r in cur.fetchall()]
 
 else:
@@ -145,16 +156,29 @@ else:
         d["log"] = d["log"][:500]
         _save(d)
 
-    def listar_log(limite: int = 200) -> list[dict]:
+    def _no_periodo(ts_float, de: str | None, ate: str | None) -> bool:
+        if not (de and ate):
+            return True
+        d = datetime.fromtimestamp(ts_float).date().isoformat()
+        return de <= d <= ate
+
+    def listar_log(limite: int = 200, de: str | None = None,
+                   ate: str | None = None) -> list[dict]:
         out = []
-        for r in _load()["log"][:limite]:
+        for r in _load()["log"]:
+            if not _no_periodo(r["ts"], de, ate):
+                continue
             out.append({"ts": datetime.fromtimestamp(r["ts"]), "usuario": r["usuario"],
                         "acao": r["acao"], "alvo": r["alvo"]})
+            if len(out) >= limite:
+                break
         return out
 
-    def resumo() -> list[dict]:
+    def resumo(de: str | None = None, ate: str | None = None) -> list[dict]:
         cont: dict = {}
         for r in _load()["log"]:
+            if not _no_periodo(r["ts"], de, ate):
+                continue
             cont[r["usuario"]] = cont.get(r["usuario"], 0) + 1
         return [{"usuario": k, "total": v}
                 for k, v in sorted(cont.items(), key=lambda x: -x[1])]
