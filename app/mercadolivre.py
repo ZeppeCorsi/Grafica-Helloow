@@ -32,6 +32,8 @@ _TTL_PRODUTOS = 300
 _cache_produtos: dict = {}  # uid -> (timestamp, lista de produtos)
 _TTL_ENVIO = 900
 _cache_envio: dict = {}     # order_id -> (timestamp, enviar_ate)
+_TTL_NOTA_ML = 120
+_cache_nota_ml: dict = {}   # order_id -> (timestamp, nota do ML ou None)
 _migrado = False           # a migracao do token legado roda so 1x por processo
 
 
@@ -306,6 +308,102 @@ def obter_pedido(order_id: str, user_id: str | None = None,
         return get(f"/orders/{order_id}", user_id=user_id, token=token)
     except httpx.HTTPStatusError:
         return None
+
+
+def nota_ml(order: dict, user_id: str | None = None,
+            token: dict | None = None, forcar: bool = False) -> dict | None:
+    """Nota fiscal EMITIDA PELO PROPRIO MERCADO LIVRE para este pedido.
+
+    Usa GET /users/{seller}/invoices/orders/{order_id}. Retorna None se o ML
+    ainda nao emitiu (ou se a conta nao usa o emissor do ML). Com cache curto."""
+    oid = str(order.get("id") or "")
+    if not oid:
+        return None
+    sid = str((order.get("seller") or {}).get("id") or user_id or _primeiro_uid() or "")
+    agora = time.time()
+    c = _cache_nota_ml.get(oid)
+    if c and not forcar and agora - c[0] < _TTL_NOTA_ML:
+        return c[1]
+    try:
+        inv = get(f"/users/{sid}/invoices/orders/{oid}", user_id=user_id, token=token)
+    except httpx.HTTPStatusError:
+        inv = None
+    except (RuntimeError, httpx.HTTPError):
+        return None  # erro temporario: nao cacheia
+    res = None
+    if inv and inv.get("id"):
+        at = inv.get("attributes") or {}
+        res = {
+            "invoice_id": str(inv.get("id") or ""),
+            "status": inv.get("status") or "",
+            "numero": inv.get("invoice_number") or "",
+            "serie": inv.get("invoice_series") or "",
+            "chave": at.get("invoice_key") or "",
+            "danfe_path": at.get("danfe_location") or "",
+            "xml_path": at.get("xml_location") or "",
+        }
+    _cache_nota_ml[oid] = (agora, res)
+    return res
+
+
+def baixar(path: str, user_id: str | None = None,
+           token: dict | None = None) -> tuple[bytes, str]:
+    """GET autenticado que retorna (bytes, content_type). Para baixar a DANFE (PDF)
+    ou o XML da nota emitida pelo Mercado Livre (danfe_location/xml_location)."""
+    uid = str(user_id) if user_id else _primeiro_uid()
+    if token is None:
+        token = store.carregar(f"ml:{uid}")
+        if not token:
+            raise RuntimeError("Sem conta do Mercado Livre.")
+    acesso = token.get("access_token")
+    if time.time() >= token.get("expires_at", 0):
+        token = _renovar_token(uid, token["refresh_token"])
+        acesso = token["access_token"]
+    resp = _req("GET", path, acesso)
+    if resp.status_code == 401 and token.get("refresh_token"):
+        novo = _renovar_token(uid, token["refresh_token"])
+        resp = _req("GET", path, novo["access_token"])
+    resp.raise_for_status()
+    return resp.content, resp.headers.get("content-type", "application/octet-stream")
+
+
+def dados_faturamento(order_id: str, user_id: str | None = None,
+                      token: dict | None = None) -> dict:
+    """CPF/CNPJ + nome/razao do comprador para a Nota Fiscal.
+
+    Usa /orders/{id}/billing_info (formato novo). Best-effort: se a conta nao
+    tiver permissao ou o ML nao expuser, retorna {} e a NF fica sem destinatario
+    identificado (consumidor final)."""
+    uid = str(user_id) if user_id else _primeiro_uid()
+    if token is None:
+        token = store.carregar(f"ml:{uid}")
+        if not token:
+            return {}
+    acesso = token.get("access_token")
+    if time.time() >= token.get("expires_at", 0):
+        try:
+            token = _renovar_token(uid, token["refresh_token"])
+            acesso = token["access_token"]
+        except Exception:
+            return {}
+    try:
+        resp = httpx.get(
+            f"{config.ML_API_BASE}/orders/{order_id}/billing_info",
+            headers={"Authorization": f"Bearer {acesso}", "x-format-new": "true"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        info = (resp.json() or {}).get("billing_info") or {}
+    except Exception:
+        return {}
+    doc = info.get("doc_number") or ""
+    doc_tipo = (info.get("doc_type") or "").upper()  # CPF ou CNPJ
+    nome = " ".join(x for x in (info.get("first_name"), info.get("last_name")) if x).strip()
+    return {
+        "doc_tipo": doc_tipo,
+        "doc_numero": "".join(ch for ch in str(doc) if ch.isdigit()),
+        "nome": info.get("business_name") or nome,
+    }
 
 
 def dados_envio(order: dict, user_id: str | None = None,

@@ -20,8 +20,8 @@ from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import (backup, bling, categorias, config, financeiro, fluxos, ia_consumo,
-               mercadolivre, produtos, store, usuarios)
+from . import (backup, balcao, bling, categorias, config, financeiro, fluxos,
+               ia_consumo, mercadolivre, nfe, produtos, store, usuarios)
 
 app = FastAPI(title="Hub de atendimento")
 
@@ -191,6 +191,7 @@ def _pagina(corpo: str, full: bool = False, ativo: str = "",
     if papel == "admin":
         admin_links = (lk("/whatsapp", "WhatsApp", "whatsapp")
                        + lk("/produtos", "Produtos", "produtos")
+                       + lk("/balcao", "Balcao", "balcao")
                        + lk("/resultado", "Resultado", "resultado")
                        + lk("/financeiro", "Financeiro", "financeiro")
                        + lk("/usuarios", "Equipe", "usuarios")
@@ -1868,6 +1869,7 @@ def produtos_page(request: Request, conta: str = "", pend: str = ""):
         return _pagina(corpo, ativo="produtos", papel=papel, nome=nome)
 
     custos = produtos.custos()
+    fiscais = produtos.fiscal()
     so_pend = pend == "1"
 
     secoes = ""
@@ -1911,6 +1913,13 @@ def produtos_page(request: Request, conta: str = "", pend: str = ""):
             else:
                 margem = "<span class='muted'>&mdash;</span>"
             busca = f"{titulo} {p.get('seller_custom_field') or ''}".lower().replace("'", "")
+            fi = fiscais.get(iid) or {}
+
+            def _fin(campo, ph, larg):  # input fiscal compacto
+                return (f"<input name='{campo}_{iid}' value=\"{_esc(fi.get(campo) or '')}\" "
+                        f"placeholder='{ph}' style='width:{larg}px;padding:6px;border:1px "
+                        "solid #d7dade;border-radius:6px;font-size:12px'/>")
+
             linhas += (
                 f"<tr data-s=\"{busca}\">"
                 f"<td>{img}</td>"
@@ -1923,10 +1932,12 @@ def produtos_page(request: Request, conta: str = "", pend: str = ""):
                 f"<input name='c_{iid}' value='{_val_input(custo)}' placeholder='0,00' "
                 "inputmode='decimal' style='width:90px;padding:7px;border:1px solid #d7dade;"
                 "border-radius:7px'/></div></td>"
+                f"<td><div style='display:flex;gap:4px'>{_fin('ncm', 'NCM', 78)}"
+                f"{_fin('cfop', 'CFOP', 54)}{_fin('cst', 'CST', 54)}</div></td>"
                 f"<td style='text-align:right'>{margem}</td></tr>"
             )
         if not linhas:
-            linhas = ("<tr><td colspan='6' class='muted'>"
+            linhas = ("<tr><td colspan='7' class='muted'>"
                       + ("Todos os produtos ja tem custo. &#127881;" if so_pend
                          else "Nenhum anuncio nesta conta.") + "</td></tr>")
         secoes += (
@@ -1934,7 +1945,8 @@ def produtos_page(request: Request, conta: str = "", pend: str = ""):
             f"<span class='muted' style='font-weight:400;font-size:13px'>"
             f"&middot; {n_loja} anuncio(s)</span></h3>"
             "<table><tr><th></th><th>Produto</th><th>Status</th><th>Preco</th>"
-            "<th>Custo (R$)</th><th style='text-align:right'>Margem bruta</th></tr>"
+            "<th>Custo (R$)</th><th>Fiscal (NCM &middot; CFOP &middot; CST)</th>"
+            "<th style='text-align:right'>Margem bruta</th></tr>"
             f"{linhas}</table>"
         )
 
@@ -1969,6 +1981,12 @@ def produtos_page(request: Request, conta: str = "", pend: str = ""):
     js = ("<script>function filtrarProd(){var q=document.getElementById('busca')"
           ".value.toLowerCase();document.querySelectorAll('tr[data-s]').forEach("
           "function(tr){tr.style.display=tr.getAttribute('data-s').indexOf(q)>=0?'':'none';});}"
+          "function aplicarFiscal(){var n=document.getElementById('ap_ncm').value,"
+          "f=document.getElementById('ap_cfop').value,s=document.getElementById('ap_cst').value;"
+          "document.querySelectorAll('tr[data-s]').forEach(function(tr){"
+          "if(tr.style.display=='none')return;"
+          "function set(pre,v){if(!v)return;var el=tr.querySelector('input[name^=\"'+pre+'_\"]');"
+          "if(el)el.value=v;}set('ncm',n);set('cfop',f);set('cst',s);});}"
           "</script>")
 
     corpo = (
@@ -1978,8 +1996,17 @@ def produtos_page(request: Request, conta: str = "", pend: str = ""):
         "<h1 style='margin-bottom:4px'>Produtos</h1>"
         "<a class='btn ghost' href='/produtos/planilha'><i class='ti ti-table'></i> "
         "Gerar planilha</a></div>"
-        "<p class='muted'>Preencha o custo de producao de cada anuncio. Ele entra automaticamente "
-        "no calculo de margem (Resultado e Financeiro). Quem nao tiver custo usa o % configurado.</p>"
+        "<p class='muted'>Preencha o <b>custo</b> de cada anuncio (entra na margem em Resultado/Financeiro) "
+        "e os <b>dados fiscais</b> (NCM, CFOP, CST/CSOSN) usados na emissao da Nota Fiscal. "
+        "Quem nao tiver custo usa o % configurado.</p>"
+        "<div class='card' style='display:flex;gap:8px;align-items:center;flex-wrap:wrap'>"
+        "<span class='muted' style='font-size:13px'><i class='ti ti-wand'></i> Aplicar fiscal a todos "
+        "os visiveis:</span>"
+        "<input id='ap_ncm' placeholder='NCM' style='width:90px;padding:6px;border:1px solid #d7dade;border-radius:6px'/>"
+        "<input id='ap_cfop' placeholder='CFOP' style='width:70px;padding:6px;border:1px solid #d7dade;border-radius:6px'/>"
+        "<input id='ap_cst' placeholder='CST/CSOSN' style='width:90px;padding:6px;border:1px solid #d7dade;border-radius:6px'/>"
+        "<button type='button' class='btn ghost' onclick='aplicarFiscal()'>Aplicar</button>"
+        "<span class='muted' style='font-size:12px'>Depois clique em <b>Salvar custos</b>.</span></div>"
         # filtros ficam FORA do form de salvar (formulario dentro de formulario quebra o envio)
         f"{resumo}{filtros}"
         "<form method='post' action='/produtos/salvar'>"
@@ -1997,14 +2024,22 @@ async def produtos_salvar(request: Request):
         return RedirectResponse("/inbox")
     form = await request.form()
     mapa: dict = {}
+    fiscal: dict = {}
     for k, v in form.items():
-        if not k.startswith("c_"):
-            continue
-        item_id = k[2:]
         s = str(v).strip()
-        mapa[item_id] = None if s == "" else _num(s, 0)
+        if k.startswith("c_"):
+            item_id = k[2:]
+            mapa[item_id] = None if s == "" else _num(s, 0)
+            continue
+        for pre in ("ncm", "cfop", "cst"):
+            if k.startswith(pre + "_"):
+                item_id = k[len(pre) + 1:]
+                fiscal.setdefault(item_id, {})[pre] = s
+                break
     if mapa:
         produtos.definir_varios(mapa)
+    if fiscal:
+        produtos.definir_fiscal_varios(fiscal)
     return RedirectResponse("/produtos", status_code=303)
 
 
@@ -2506,6 +2541,12 @@ def conversa(request: Request, pack: str = "", conta: str = "", buyer: str = "",
     if pack_id and pack_id != oid:
         cod_html += f" &middot; pacote {pack_id}"
 
+    try:
+        nota_ml = mercadolivre.nota_ml(o, user_id=uid, token=acc) if o else None
+    except Exception:
+        nota_ml = None
+    nf_html = _nf_ordbar(pack, uid, voltar, papel, nota_ml)
+
     corpo = (
         "<link rel='stylesheet' href='https://cdn.jsdelivr.net/npm/"
         "@tabler/icons-webfont@3.11.0/dist/tabler-icons.min.css'>"
@@ -2523,7 +2564,8 @@ def conversa(request: Request, pack: str = "", conta: str = "", buyer: str = "",
         + (f"<span>{_badge_envio(env.get('envio_status'))}</span>" if env.get("envio_status") else "")
         + f"<span><i class='ti ti-hash'></i> {cod_html}</span>"
         f"<a href='/imprimir?pack={pack}&conta={uid}' target='_blank' "
-        "style='color:#534AB7;font-weight:500'><i class='ti ti-printer'></i> Imprimir pedido</a></div>"
+        "style='color:#534AB7;font-weight:500'><i class='ti ti-printer'></i> Imprimir pedido</a>"
+        f"{nf_html}</div>"
         f"<div class='thread' style='height:auto;max-height:60vh' id='thread'>{baloes}</div>"
         "<form class='reply' method='post' action='/conversa/responder'>"
         f"<input type='hidden' name='pack' value='{pack}'/>"
@@ -2550,6 +2592,499 @@ def conversa_responder(request: Request, pack: str = Form(...), conta: str = For
     v = f"&voltar={quote(voltar, safe='')}" if voltar else ""
     return RedirectResponse(f"/conversa?pack={pack}&conta={conta}&buyer={buyer}{v}",
                             status_code=303)
+
+
+# --------------------------------------------------------------------------- #
+# Nota Fiscal (NF-e) via provedor fiscal (Focus NFe) -- ver app/nfe.py
+# --------------------------------------------------------------------------- #
+_NF_BADGE = {
+    # status do Focus (pt) e do Mercado Livre (en)
+    "autorizado": ("Autorizada", "#0F6E56", "#E4F3EE"),
+    "authorized": ("Autorizada", "#0F6E56", "#E4F3EE"),
+    "processando_autorizacao": ("Processando", "#7A5B00", "#FBF3D6"),
+    "processando": ("Processando", "#7A5B00", "#FBF3D6"),
+    "pending": ("Processando", "#7A5B00", "#FBF3D6"),
+    "processing": ("Processando", "#7A5B00", "#FBF3D6"),
+    "erro_autorizacao": ("Erro na SEFAZ", "#A32D2D", "#F8E5E5"),
+    "erro": ("Erro", "#A32D2D", "#F8E5E5"),
+    "error": ("Erro", "#A32D2D", "#F8E5E5"),
+    "denegado": ("Denegada", "#A32D2D", "#F8E5E5"),
+    "cancelado": ("Cancelada", "#555", "#eee"),
+    "cancelled": ("Cancelada", "#555", "#eee"),
+    "canceled": ("Cancelada", "#555", "#eee"),
+}
+
+
+def _badge_nf(status: str) -> str:
+    rot, cor, bg = _NF_BADGE.get(status or "", (status or "-", "#555", "#eee"))
+    return (f"<span style='background:{bg};color:{cor};padding:2px 8px;border-radius:999px;"
+            f"font-size:12px;font-weight:600'>NF {rot}</span>")
+
+
+def _nf_ordbar(pack: str, uid: str, voltar: str, papel: str,
+               nota_ml: dict | None = None) -> str:
+    """Trecho da barra do pedido com o status da NF ou o botao de emitir.
+
+    Prioridade: (1) NF emitida pelo proprio Mercado Livre (puxa DANFE/XML);
+    (2) NF emitida pelo Focus (nosso), com botao de emitir se ainda nao houver."""
+    v = f"&voltar={quote(voltar, safe='')}" if voltar else ""
+    # (1) Nota do proprio Mercado Livre
+    if nota_ml:
+        partes = [_badge_nf(nota_ml.get("status"))]
+        num = str(nota_ml.get("numero") or "")
+        serie = str(nota_ml.get("serie") or "")
+        if num:
+            partes.append(f"<span class='muted'>NF {num}" + (f"/{serie}" if serie else "")
+                          + " &middot; ML</span>")
+        if nota_ml.get("danfe_path"):
+            partes.append(f"<a href='/nf/ml/danfe?pack={pack}&conta={uid}' target='_blank' "
+                          "style='color:#534AB7;font-weight:500'>"
+                          "<i class='ti ti-file-invoice'></i> DANFE</a>")
+        if nota_ml.get("xml_path"):
+            partes.append(f"<a href='/nf/ml/xml?pack={pack}&conta={uid}' target='_blank' "
+                          "class='muted'>XML</a>")
+        return ("<span style='display:flex;gap:10px;align-items:center;flex-wrap:wrap'>"
+                + " ".join(partes) + "</span>")
+    # (2) Nota emitida pelo nosso provedor (Focus)
+    try:
+        nota = nfe.por_pack(pack)
+    except Exception:
+        nota = None
+    if nota:
+        partes = [_badge_nf(nota.get("status"))]
+        if nota.get("numero"):
+            partes.append(f"<span class='muted'>n {nota['numero']}</span>")
+        if nota.get("danfe_url"):
+            partes.append(f"<a href='{_esc(nota['danfe_url'])}' target='_blank' "
+                          "style='color:#534AB7;font-weight:500'>"
+                          "<i class='ti ti-file-invoice'></i> DANFE</a>")
+        if nota.get("xml_url"):
+            partes.append(f"<a href='{_esc(nota['xml_url'])}' target='_blank' class='muted'>XML</a>")
+        partes.append(f"<a href='/nf/status?ref={quote(nota.get('ref', ''), safe='')}&pack={pack}"
+                      f"&conta={uid}{v}' class='muted'><i class='ti ti-refresh'></i> atualizar</a>")
+        msg = ""
+        if nota.get("status") in ("erro_autorizacao", "erro", "denegado") and nota.get("mensagem"):
+            msg = ("<div class='muted' style='font-size:11px;color:#A32D2D;width:100%'>"
+                   f"{_esc(str(nota['mensagem'])[:180])}</div>")
+        return ("<span style='display:flex;gap:10px;align-items:center;flex-wrap:wrap'>"
+                + " ".join(partes) + "</span>" + msg)
+    if papel != "admin":
+        return ""
+    if not nfe.configurado():
+        return ("<span class='muted' style='font-size:12px'>"
+                "<i class='ti ti-file-invoice'></i> NF: configurar Focus NFe</span>")
+    return (f"<form method='post' action='/nf/emitir' style='display:inline'>"
+            f"<input type='hidden' name='pack' value='{pack}'/>"
+            f"<input type='hidden' name='conta' value='{uid}'/>"
+            f"<input type='hidden' name='voltar' value='{_esc(voltar)}'/>"
+            "<button class='btn ghost' style='padding:4px 10px;font-size:13px' "
+            "onclick=\"return confirm('Emitir a Nota Fiscal deste pedido?')\">"
+            "<i class='ti ti-file-invoice'></i> Emitir NF</button></form>")
+
+
+def _nfe_payload(o: dict, env: dict, fat: dict) -> dict:
+    """Monta o corpo da NF-e (formato Focus NFe) a partir do pedido do ML."""
+    fisc_map = produtos.fiscal()
+    itens = []
+    for i, it in enumerate(o.get("order_items") or [], start=1):
+        item = it.get("item") or {}
+        iid = str(item.get("id") or "")
+        fi = fisc_map.get(iid) or {}
+        qtd = float(it.get("quantity") or 1)
+        unit = round(float(it.get("unit_price") or 0), 2)
+        und = (fi.get("unidade") or "UN")[:6]
+        itens.append({
+            "numero_item": i,
+            "codigo_produto": iid or f"ITEM{i}",
+            "descricao": (item.get("title") or "Item")[:120],
+            "cfop": fi.get("cfop") or "5102",
+            "unidade_comercial": und,
+            "quantidade_comercial": qtd,
+            "valor_unitario_comercial": unit,
+            "valor_bruto": round(unit * qtd, 2),
+            "unidade_tributavel": und,
+            "quantidade_tributavel": qtd,
+            "valor_unitario_tributavel": unit,
+            "ncm": (fi.get("ncm") or "").replace(".", "") or "49111090",
+            "icms_origem": int(fi.get("origem") or 0),
+            "icms_situacao_tributaria": fi.get("cst") or "102",
+        })
+    pay = {
+        "natureza_operacao": "Venda de mercadoria",
+        "tipo_documento": 1,
+        "finalidade_emissao": 1,
+        "consumidor_final": 1,
+        "presenca_comprador": 2,  # operacao nao presencial (internet)
+        "modalidade_frete": 9,
+        "nome_destinatario": (fat.get("nome") or env.get("nome") or "Consumidor final")[:60],
+        "logradouro_destinatario": env.get("rua") or "",
+        "numero_destinatario": env.get("numero") or "S/N",
+        "complemento_destinatario": (env.get("complemento") or "")[:60],
+        "bairro_destinatario": env.get("bairro") or "",
+        "municipio_destinatario": env.get("cidade") or "",
+        "uf_destinatario": env.get("estado") or "",
+        "cep_destinatario": (env.get("cep") or "").replace("-", ""),
+        "pais_destinatario": "Brasil",
+        "indicador_inscricao_estadual_destinatario": 9,  # 9 = nao contribuinte
+        "items": itens,
+    }
+    doc = fat.get("doc_numero") or ""
+    if fat.get("doc_tipo") == "CNPJ" and doc:
+        pay["cnpj_destinatario"] = doc
+    elif doc:
+        pay["cpf_destinatario"] = doc
+    if nfe.CNPJ_EMITENTE:
+        pay["cnpj_emitente"] = nfe.CNPJ_EMITENTE
+    return pay
+
+
+@app.post("/nf/emitir")
+def nf_emitir(request: Request, pack: str = Form(...), conta: str = Form(""),
+              voltar: str = Form("")):
+    nome, papel = _atual(request)
+    if papel != "admin":
+        return RedirectResponse("/inbox")
+    contas = mercadolivre.contas()
+    acc = next((a for a in contas if str(a["user_id"]) == conta), None) or (contas[0] if contas else None)
+    uid = str(acc["user_id"]) if acc else conta
+    try:
+        o = (mercadolivre.obter_pedido(pack, token=acc)
+             or mercadolivre.pedido_do_pack(pack, token=acc) or {})
+        env = mercadolivre.dados_envio(o, user_id=uid, token=acc) if o else {}
+        fat = (mercadolivre.dados_faturamento(str(o.get("id") or pack), user_id=uid, token=acc)
+               if o else {})
+        nfe.emitir(pack, uid, _nfe_payload(o, env, fat))
+        usuarios.registrar(nome or "?", "nf_emitir", pack)
+    except Exception:
+        pass
+    v = f"&voltar={quote(voltar, safe='')}" if voltar else ""
+    return RedirectResponse(f"/conversa?pack={pack}&conta={uid}{v}", status_code=303)
+
+
+@app.get("/nf/status")
+def nf_status(request: Request, ref: str = "", pack: str = "", conta: str = "",
+              voltar: str = ""):
+    if _atual(request)[1] != "admin":
+        return RedirectResponse("/inbox")
+    try:
+        nfe.atualizar(ref)
+    except Exception:
+        pass
+    if voltar.startswith("/"):  # ex.: balcao manda voltar=/balcao
+        return RedirectResponse(voltar, status_code=303)
+    v = f"&voltar={quote(voltar, safe='')}" if voltar else ""
+    return RedirectResponse(f"/conversa?pack={pack}&conta={conta}{v}", status_code=303)
+
+
+def _baixar_nota_ml(pack: str, conta: str, tipo: str):
+    """Baixa a DANFE (tipo='danfe') ou o XML (tipo='xml') da NF emitida pelo ML."""
+    contas = mercadolivre.contas()
+    if not contas:
+        return RedirectResponse("/ml/login")
+    acc = next((a for a in contas if str(a["user_id"]) == conta), None) or contas[0]
+    uid = str(acc["user_id"])
+    try:
+        o = (mercadolivre.obter_pedido(pack, token=acc)
+             or mercadolivre.pedido_do_pack(pack, token=acc) or {})
+        nota = mercadolivre.nota_ml(o, user_id=uid, token=acc) if o else None
+    except Exception:
+        nota = None
+    if not nota:
+        return Response("Nota fiscal do Mercado Livre nao encontrada para este pedido.",
+                        status_code=404, media_type="text/plain; charset=utf-8")
+    path = nota.get("danfe_path") if tipo == "danfe" else nota.get("xml_path")
+    if not path:
+        return Response("Arquivo indisponivel.", status_code=404,
+                        media_type="text/plain; charset=utf-8")
+    try:
+        conteudo, ctype = mercadolivre.baixar(path, user_id=uid, token=acc)
+    except Exception:
+        return Response("Nao consegui baixar a nota do Mercado Livre agora.",
+                        status_code=502, media_type="text/plain; charset=utf-8")
+    num = str(nota.get("numero") or pack)
+    if tipo == "danfe":
+        ctype = ctype if "pdf" in ctype else "application/pdf"
+        disp = f"inline; filename=\"danfe-{num}.pdf\""
+    else:
+        ctype = ctype if "xml" in ctype else "application/xml"
+        disp = f"attachment; filename=\"nfe-{num}.xml\""
+    return Response(conteudo, media_type=ctype, headers={"Content-Disposition": disp})
+
+
+@app.get("/nf/ml/danfe")
+def nf_ml_danfe(request: Request, pack: str = "", conta: str = ""):
+    return _baixar_nota_ml(pack, conta, "danfe")
+
+
+@app.get("/nf/ml/xml")
+def nf_ml_xml(request: Request, pack: str = "", conta: str = ""):
+    return _baixar_nota_ml(pack, conta, "xml")
+
+
+# --------------------------------------------------------------------------- #
+# Balcao: cadastro de clientes/produtos + emissao de NF avulsa (Focus)
+# --------------------------------------------------------------------------- #
+def _nfe_payload_balcao(cli: dict, linhas: list) -> dict:
+    """Monta a NF-e (formato Focus) de uma venda no balcao (cliente + itens)."""
+    itens = []
+    for i, (p, qtd) in enumerate(linhas, start=1):
+        unit = round(float(p.get("preco") or 0), 2)
+        und = (p.get("unidade") or "UN")[:6]
+        itens.append({
+            "numero_item": i,
+            "codigo_produto": f"BAL{p.get('id')}",
+            "descricao": (p.get("nome") or "Item")[:120],
+            "cfop": p.get("cfop") or "5102",
+            "unidade_comercial": und,
+            "quantidade_comercial": qtd,
+            "valor_unitario_comercial": unit,
+            "valor_bruto": round(unit * qtd, 2),
+            "unidade_tributavel": und,
+            "quantidade_tributavel": qtd,
+            "valor_unitario_tributavel": unit,
+            "ncm": (p.get("ncm") or "").replace(".", "") or "49111090",
+            "icms_origem": int(p.get("origem") or 0),
+            "icms_situacao_tributaria": p.get("cst") or "102",
+        })
+    pay = {
+        "natureza_operacao": "Venda de mercadoria",
+        "tipo_documento": 1,
+        "finalidade_emissao": 1,
+        "consumidor_final": 1,
+        "presenca_comprador": 1,  # operacao presencial (balcao)
+        "modalidade_frete": 9,
+        "nome_destinatario": (cli.get("nome") or "Consumidor final")[:60],
+        "logradouro_destinatario": cli.get("rua") or "",
+        "numero_destinatario": cli.get("numero") or "S/N",
+        "complemento_destinatario": (cli.get("complemento") or "")[:60],
+        "bairro_destinatario": cli.get("bairro") or "",
+        "municipio_destinatario": cli.get("cidade") or "",
+        "uf_destinatario": cli.get("uf") or "",
+        "cep_destinatario": (cli.get("cep") or "").replace("-", ""),
+        "pais_destinatario": "Brasil",
+        "indicador_inscricao_estadual_destinatario": 1 if cli.get("ie") else 9,
+        "items": itens,
+    }
+    if cli.get("ie"):
+        pay["inscricao_estadual_destinatario"] = cli["ie"]
+    doc = "".join(ch for ch in str(cli.get("doc_numero") or "") if ch.isdigit())
+    if (cli.get("doc_tipo") or "").upper() == "CNPJ" and doc:
+        pay["cnpj_destinatario"] = doc
+    elif doc:
+        pay["cpf_destinatario"] = doc
+    if nfe.CNPJ_EMITENTE:
+        pay["cnpj_emitente"] = nfe.CNPJ_EMITENTE
+    return pay
+
+
+def _campo(nome, label, valor="", larg=160, ph=""):
+    return (f"<label style='font-size:12px;color:#555'>{label}<br>"
+            f"<input name='{nome}' value=\"{_esc(str(valor or ''))}\" placeholder='{ph}' "
+            f"style='width:{larg}px;padding:7px;border:1px solid #d7dade;border-radius:7px'/></label>")
+
+
+@app.get("/balcao", response_class=HTMLResponse)
+def balcao_page(request: Request, msg: str = ""):
+    nome, papel = _atual(request)
+    if papel != "admin":
+        return RedirectResponse("/inbox")
+    clientes = balcao.listar_clientes()
+    prods = balcao.listar_produtos()
+
+    aviso = ""
+    if msg:
+        aviso = (f"<div class='card' style='background:#EAF6F0;border-color:#bfe3d3'>{_esc(msg)}</div>")
+    if not nfe.configurado():
+        aviso += ("<div class='card' style='background:#FBF3D6;border-color:#ecdca0'>"
+                  "<b>Emissao em modo preparacao.</b> A NF sera emitida de verdade quando o "
+                  "token do Focus NFe estiver configurado (FOCUS_NFE_TOKEN no Render). "
+                  "Voce ja pode cadastrar clientes e produtos.</div>")
+
+    # ---- Emitir NF (balcao) ----
+    opt_cli = "<option value=''>Selecione o cliente</option>" + "".join(
+        f"<option value='{c['id']}'>{_esc(c.get('nome') or '')}"
+        + (f" ({c.get('doc_numero')})" if c.get('doc_numero') else "") + "</option>"
+        for c in clientes)
+    opt_prod = "<option value=''>Produto...</option>" + "".join(
+        f"<option value='{p['id']}'>{_esc(p.get('nome') or '')} &middot; {_moeda(float(p.get('preco') or 0))}</option>"
+        for p in prods)
+    linha_item = (f"<div class='item-linha' style='display:flex;gap:8px;margin-bottom:6px'>"
+                  f"<select name='prod' style='flex:1;padding:7px;border:1px solid #d7dade;border-radius:7px'>{opt_prod}</select>"
+                  "<input name='qtd' value='1' inputmode='decimal' style='width:70px;padding:7px;"
+                  "border:1px solid #d7dade;border-radius:7px'/></div>")
+    emitir_btn = ("<button class='btn'>Emitir NF do balcao</button>" if nfe.configurado()
+                  else "<button class='btn' disabled title='Configure o Focus NFe'>Emitir NF do balcao</button>")
+    card_emitir = (
+        "<div class='card'><h3 style='margin-top:0'>Emitir NF do balcao</h3>"
+        "<form method='post' action='/balcao/emitir'>"
+        "<div style='margin-bottom:10px'><select name='cliente_id' required "
+        "style='padding:8px;border:1px solid #d7dade;border-radius:8px;min-width:280px'>"
+        + opt_cli + "</select></div>"
+        "<div id='itens'>" + linha_item + "</div>"
+        "<button type='button' class='btn ghost' onclick='addItem()' style='margin:4px 0 12px'>"
+        "+ item</button><br>" + emitir_btn + "</form></div>"
+        "<script>function addItem(){var c=document.getElementById('itens');"
+        "var n=c.firstElementChild.cloneNode(true);c.appendChild(n);}</script>"
+    )
+
+    # ---- Notas emitidas no balcao ----
+    linhas_nf = ""
+    for n in nfe.listar_balcao(50):
+        links = ""
+        if n.get("danfe_url"):
+            links += f"<a href='{_esc(n['danfe_url'])}' target='_blank'>DANFE</a> "
+        if n.get("xml_url"):
+            links += f"<a href='{_esc(n['xml_url'])}' target='_blank' class='muted'>XML</a> "
+        links += (f"<a class='muted' href='/nf/status?ref={quote(n.get('ref',''), safe='')}"
+                  "&voltar=/balcao'>atualizar</a>")
+        linhas_nf += (f"<tr><td>{_badge_nf(n.get('status'))}</td><td>{n.get('numero') or '-'}</td>"
+                      f"<td>{links}</td></tr>")
+    if not linhas_nf:
+        linhas_nf = "<tr><td colspan='3' class='muted'>Nenhuma NF de balcao emitida ainda.</td></tr>"
+    card_notas = ("<div class='card'><h3 style='margin-top:0'>Notas emitidas no balcao</h3>"
+                  "<table><tr><th>Status</th><th>Numero</th><th>Arquivos</th></tr>"
+                  f"{linhas_nf}</table></div>")
+
+    # ---- Clientes ----
+    linhas_cli = ""
+    for c in clientes:
+        linhas_cli += (
+            f"<tr><td>{_esc(c.get('nome') or '')}</td>"
+            f"<td>{_esc((c.get('doc_tipo') or '') + ' ' + (c.get('doc_numero') or ''))}</td>"
+            f"<td>{_esc((c.get('cidade') or '') + '/' + (c.get('uf') or ''))}</td>"
+            f"<td><form method='post' action='/balcao/cliente/excluir' style='display:inline' "
+            f"onsubmit=\"return confirm('Excluir este cliente?')\">"
+            f"<input type='hidden' name='id' value='{c['id']}'/>"
+            "<button class='btn ghost' style='padding:2px 8px'>x</button></form></td></tr>")
+    if not linhas_cli:
+        linhas_cli = "<tr><td colspan='4' class='muted'>Nenhum cliente cadastrado.</td></tr>"
+    form_cli = (
+        "<form method='post' action='/balcao/cliente/salvar' style='display:flex;gap:8px;"
+        "flex-wrap:wrap;align-items:end;margin-bottom:12px'>"
+        + _campo("nome", "Nome / Razao social", larg=220)
+        + ("<label style='font-size:12px;color:#555'>Tipo<br><select name='doc_tipo' "
+           "style='padding:7px;border:1px solid #d7dade;border-radius:7px'>"
+           "<option value='CPF'>CPF</option><option value='CNPJ'>CNPJ</option></select></label>")
+        + _campo("doc_numero", "CPF/CNPJ", larg=150)
+        + _campo("ie", "Inscr. Estadual", larg=120)
+        + _campo("telefone", "Telefone", larg=120)
+        + _campo("cep", "CEP", larg=90)
+        + _campo("rua", "Rua", larg=200)
+        + _campo("numero", "Num", larg=60)
+        + _campo("complemento", "Compl.", larg=110)
+        + _campo("bairro", "Bairro", larg=130)
+        + _campo("cidade", "Cidade", larg=140)
+        + _campo("uf", "UF", larg=50)
+        + "<button class='btn'>Salvar cliente</button></form>")
+    card_cli = ("<div class='card'><h3 style='margin-top:0'>Clientes</h3>" + form_cli
+                + "<table><tr><th>Nome</th><th>Documento</th><th>Cidade</th><th></th></tr>"
+                + linhas_cli + "</table></div>")
+
+    # ---- Produtos (balcao) ----
+    linhas_prod = ""
+    for p in prods:
+        linhas_prod += (
+            f"<tr><td>{_esc(p.get('nome') or '')}</td><td>{_moeda(float(p.get('preco') or 0))}</td>"
+            f"<td class='muted' style='font-size:12px'>{_esc(p.get('ncm') or '')} &middot; "
+            f"{_esc(p.get('cfop') or '')} &middot; {_esc(p.get('cst') or '')}</td>"
+            f"<td><form method='post' action='/balcao/produto/excluir' style='display:inline' "
+            f"onsubmit=\"return confirm('Excluir este produto?')\">"
+            f"<input type='hidden' name='id' value='{p['id']}'/>"
+            "<button class='btn ghost' style='padding:2px 8px'>x</button></form></td></tr>")
+    if not linhas_prod:
+        linhas_prod = "<tr><td colspan='4' class='muted'>Nenhum produto de balcao cadastrado.</td></tr>"
+    form_prod = (
+        "<form method='post' action='/balcao/produto/salvar' style='display:flex;gap:8px;"
+        "flex-wrap:wrap;align-items:end;margin-bottom:12px'>"
+        + _campo("nome", "Produto", larg=220)
+        + _campo("preco", "Preco (R$)", larg=90, ph="0,00")
+        + _campo("ncm", "NCM", larg=90)
+        + _campo("cfop", "CFOP", larg=70)
+        + _campo("cst", "CST/CSOSN", larg=90)
+        + _campo("unidade", "Unid.", larg=60, ph="UN")
+        + _campo("origem", "Origem", larg=60, ph="0")
+        + "<button class='btn'>Salvar produto</button></form>")
+    card_prod = ("<div class='card'><h3 style='margin-top:0'>Produtos do balcao</h3>" + form_prod
+                 + "<table><tr><th>Produto</th><th>Preco</th><th>Fiscal (NCM &middot; CFOP &middot; CST)"
+                 "</th><th></th></tr>" + linhas_prod + "</table></div>")
+
+    corpo = (
+        "<link rel='stylesheet' href='https://cdn.jsdelivr.net/npm/"
+        "@tabler/icons-webfont@3.11.0/dist/tabler-icons.min.css'>"
+        "<h1>Balcao</h1>"
+        "<p class='muted'>Cadastre <b>clientes</b> e <b>produtos</b> e emita a Nota Fiscal de "
+        "vendas fora do Mercado Livre (balcao). A emissao usa o provedor Focus NFe.</p>"
+        + aviso + card_emitir + card_notas + card_cli + card_prod
+    )
+    return _pagina(corpo, ativo="balcao", papel=papel, nome=nome)
+
+
+@app.post("/balcao/cliente/salvar")
+async def balcao_cliente_salvar(request: Request):
+    if _atual(request)[1] != "admin":
+        return RedirectResponse("/inbox")
+    form = await request.form()
+    dados = {k: (str(form.get(k) or "").strip()) for k in balcao._CAMPOS_CLI}
+    if dados.get("nome"):
+        balcao.salvar_cliente(dados)
+    return RedirectResponse("/balcao", status_code=303)
+
+
+@app.post("/balcao/cliente/excluir")
+async def balcao_cliente_excluir(request: Request, id: int = Form(...)):
+    if _atual(request)[1] != "admin":
+        return RedirectResponse("/inbox")
+    balcao.excluir_cliente(id)
+    return RedirectResponse("/balcao", status_code=303)
+
+
+@app.post("/balcao/produto/salvar")
+async def balcao_produto_salvar(request: Request):
+    if _atual(request)[1] != "admin":
+        return RedirectResponse("/inbox")
+    form = await request.form()
+    dados = {k: (str(form.get(k) or "").strip()) for k in balcao._CAMPOS_PROD}
+    dados["preco"] = _num(dados.get("preco") or "0", 0)
+    if dados.get("nome"):
+        balcao.salvar_produto(dados)
+    return RedirectResponse("/balcao", status_code=303)
+
+
+@app.post("/balcao/produto/excluir")
+async def balcao_produto_excluir(request: Request, id: int = Form(...)):
+    if _atual(request)[1] != "admin":
+        return RedirectResponse("/inbox")
+    balcao.excluir_produto(id)
+    return RedirectResponse("/balcao", status_code=303)
+
+
+@app.post("/balcao/emitir")
+async def balcao_emitir(request: Request):
+    nome, papel = _atual(request)
+    if papel != "admin":
+        return RedirectResponse("/inbox")
+    form = await request.form()
+    cli = balcao.obter_cliente(int(form.get("cliente_id") or 0)) or {}
+    prod_ids = form.getlist("prod")
+    qtds = form.getlist("qtd")
+    linhas = []
+    for pid, q in zip(prod_ids, qtds):
+        if not str(pid).strip():
+            continue
+        p = balcao.obter_produto(int(pid))
+        if p:
+            linhas.append((p, float(_num(str(q or "1"), 1)) or 1))
+    if not cli or not linhas:
+        return RedirectResponse("/balcao?msg=" + quote("Escolha um cliente e ao menos um produto."),
+                                status_code=303)
+    try:
+        pack = f"balcao-{int(datetime.now().timestamp())}"
+        reg = nfe.emitir(pack, "", _nfe_payload_balcao(cli, linhas))
+        usuarios.registrar(nome or "?", "nf_balcao", pack)
+        msg = f"NF do balcao enviada (status: {reg.get('status')})."
+    except Exception as e:
+        msg = f"Nao consegui emitir agora: {e}"
+    return RedirectResponse("/balcao?msg=" + quote(msg), status_code=303)
 
 
 @app.get("/imprimir", response_class=HTMLResponse)

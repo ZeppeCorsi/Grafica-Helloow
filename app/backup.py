@@ -25,6 +25,9 @@ _TABELAS = [
     ("usuarios", "id"),
     ("custos_fixos", "id"),
     ("ia_consumo", "id"),
+    ("nota_fiscal", "ref"),
+    ("cliente", "id"),
+    ("produto_balcao", "id"),
 ]
 
 
@@ -92,7 +95,8 @@ else:
     def exportar() -> dict:
         dump: dict = {"versao": 1, "arquivos": {}}
         nomes = ["produtos_custo.json", "fluxos.json", "categorias.json",
-                 "usuarios.json", "custos_fixos.json", "ia_consumo.json"]
+                 "usuarios.json", "custos_fixos.json", "ia_consumo.json",
+                 "notas_fiscais.json", "clientes.json", "produtos_balcao.json"]
         # + arquivos de configuracao do store (token_*.json), menos tokens de acesso
         for p in config.BASE_DIR.glob("token_*.json"):
             if p.name != "token.json" and not p.name.startswith("token_ml_"):
