@@ -2531,6 +2531,7 @@ def conversa(request: Request, pack: str = "", conta: str = "", buyer: str = "",
     loja = mercadolivre.nome_exibicao(acc)
     pack_id = str(o.get("pack_id") or "")
     oid = str(o.get("id") or "")
+    ship_id = str((o.get("shipping") or {}).get("id") or "")
 
     # pacote com varios pedidos do mesmo comprador -> mostra todos os itens juntos
     pedidos_pack = [o]
@@ -2584,7 +2585,10 @@ def conversa(request: Request, pack: str = "", conta: str = "", buyer: str = "",
         + f"<span><i class='ti ti-hash'></i> {cod_html}</span>"
         f"<a href='/imprimir?pack={pack}&conta={uid}' target='_blank' "
         "style='color:#534AB7;font-weight:500'><i class='ti ti-printer'></i> Imprimir pedido</a>"
-        f"{nf_html}</div>"
+        + (f"<a href='/nf/ml/etiqueta?pack={pack}&conta={uid}' target='_blank' "
+           "style='color:#0F6E56;font-weight:600'><i class='ti ti-tag'></i> Etiqueta + DANFE</a>"
+           if ship_id else "")
+        + f"{nf_html}</div>"
         f"<div class='thread' style='height:auto;max-height:60vh' id='thread'>{baloes}</div>"
         "<form class='reply' method='post' action='/conversa/responder'>"
         f"<input type='hidden' name='pack' value='{pack}'/>"
@@ -2838,6 +2842,36 @@ def nf_ml_danfe(request: Request, pack: str = "", conta: str = ""):
 @app.get("/nf/ml/xml")
 def nf_ml_xml(request: Request, pack: str = "", conta: str = ""):
     return _baixar_nota_ml(pack, conta, "xml")
+
+
+@app.get("/nf/ml/etiqueta")
+def nf_ml_etiqueta(request: Request, pack: str = "", conta: str = ""):
+    """Etiqueta de envio do ML (com a DANFE simplificada junto, se o vendedor
+    tiver ativado a impressao conjunta nas preferencias de venda do ML)."""
+    contas = mercadolivre.contas()
+    if not contas:
+        return RedirectResponse("/ml/login")
+    acc = next((a for a in contas if str(a["user_id"]) == conta), None) or contas[0]
+    uid = str(acc["user_id"])
+    try:
+        o = (mercadolivre.obter_pedido(pack, token=acc)
+             or mercadolivre.pedido_do_pack(pack, token=acc) or {})
+    except Exception:
+        o = {}
+    ship = str((o.get("shipping") or {}).get("id") or "")
+    if not ship:
+        return Response("Pedido sem envio (shipment) para gerar a etiqueta.",
+                        status_code=404, media_type="text/plain; charset=utf-8")
+    try:
+        conteudo, ctype = mercadolivre.baixar(
+            f"/shipment_labels?shipment_ids={ship}&response_type=pdf", user_id=uid, token=acc)
+    except Exception:
+        return Response("Nao consegui gerar a etiqueta agora. O ML costuma liberar a etiqueta "
+                        "quando o envio esta pronto para despacho.", status_code=502,
+                        media_type="text/plain; charset=utf-8")
+    ctype = ctype if "pdf" in ctype else "application/pdf"
+    return Response(conteudo, media_type=ctype,
+                    headers={"Content-Disposition": f"inline; filename=\"etiqueta-{ship}.pdf\""})
 
 
 @app.get("/nf/ml/diag", response_class=HTMLResponse)
