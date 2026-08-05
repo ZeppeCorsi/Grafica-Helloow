@@ -377,6 +377,32 @@ def baixar(path: str, user_id: str | None = None,
     return resp.content, resp.headers.get("content-type", "application/octet-stream")
 
 
+def get_status(path: str, user_id: str | None = None,
+               token: dict | None = None) -> tuple[int, object]:
+    """GET autenticado que devolve (status_code, corpo) SEM levantar erro.
+    Usado no diagnostico de Nota Fiscal do ML."""
+    uid = str(user_id) if user_id else _primeiro_uid()
+    if token is None:
+        token = store.carregar(f"ml:{uid}")
+        if not token:
+            return (0, "sem token da conta")
+    acesso = token.get("access_token")
+    if time.time() >= token.get("expires_at", 0):
+        try:
+            token = _renovar_token(uid, token["refresh_token"])
+            acesso = token["access_token"]
+        except Exception:
+            pass
+    try:
+        resp = _req("GET", path, acesso)
+    except Exception as e:
+        return (0, f"{type(e).__name__}: {e}")
+    try:
+        return (resp.status_code, resp.json())
+    except Exception:
+        return (resp.status_code, resp.text[:2000])
+
+
 def dados_faturamento(order_id: str, user_id: str | None = None,
                       token: dict | None = None) -> dict:
     """CPF/CNPJ + nome/razao do comprador para a Nota Fiscal.

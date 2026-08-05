@@ -2840,6 +2840,63 @@ def nf_ml_xml(request: Request, pack: str = "", conta: str = ""):
     return _baixar_nota_ml(pack, conta, "xml")
 
 
+@app.get("/nf/ml/diag", response_class=HTMLResponse)
+def nf_ml_diag(request: Request, cod: str = ""):
+    """Diagnostico da NF do Mercado Livre: dado um codigo de pedido/pacote,
+    consulta a API de invoices do ML e mostra a resposta crua (status + json)."""
+    nome, papel = _atual(request)
+    if papel != "admin":
+        return RedirectResponse("/inbox")
+    contas = mercadolivre.contas()
+    out: list[str] = []
+    codigos = [c.strip() for c in cod.replace(",", " ").split() if c.strip()]
+    if not codigos:
+        out.append("Informe um codigo de pedido ou pacote em ?cod=NUMERO")
+    for code in codigos:
+        out.append(f"===== codigo {code} =====")
+        achou = False
+        for acc in contas:
+            uid = str(acc["user_id"])
+            loja = mercadolivre.nome_exibicao(acc)
+            try:
+                o = (mercadolivre.obter_pedido(code, token=acc)
+                     or mercadolivre.pedido_do_pack(code, token=acc))
+            except Exception as e:
+                out.append(f"  [{loja}] erro ao achar pedido: {type(e).__name__}")
+                continue
+            if not o:
+                continue
+            achou = True
+            oid = str(o.get("id") or "")
+            sid = str((o.get("seller") or {}).get("id") or uid)
+            ship = str((o.get("shipping") or {}).get("id") or "")
+            out.append(f"  [{loja}] pedido {oid} | seller {sid} | status={o.get('status')} "
+                       f"| pago={o.get('status') == 'paid'} | shipment={ship or '-'}")
+            st, body = mercadolivre.get_status(f"/users/{sid}/invoices/orders/{oid}",
+                                               user_id=uid, token=acc)
+            out.append(f"    GET /users/{sid}/invoices/orders/{oid} -> HTTP {st}")
+            out.append("    " + json.dumps(body, ensure_ascii=False, indent=2)[:2500])
+            if ship:
+                st2, body2 = mercadolivre.get_status(
+                    f"/users/{sid}/invoices/shipments/{ship}", user_id=uid, token=acc)
+                out.append(f"    GET /users/{sid}/invoices/shipments/{ship} -> HTTP {st2}")
+                out.append("    " + json.dumps(body2, ensure_ascii=False, indent=2)[:1500])
+            break
+        if not achou:
+            out.append("  pedido nao encontrado em nenhuma conta conectada.")
+
+    corpo = ("<h1>Diagnostico NF do Mercado Livre</h1>"
+             "<form method='get' style='margin-bottom:12px'>"
+             "<input name='cod' placeholder='numero do pedido ou pacote' "
+             f"value='{_esc(cod)}' style='padding:8px;border:1px solid #d7dade;"
+             "border-radius:8px;min-width:280px'/> "
+             "<button class='btn'>Consultar</button></form>"
+             "<pre style='background:#0d1117;color:#c9d1d9;padding:14px;border-radius:10px;"
+             "overflow:auto;font-size:12px;line-height:1.5'>"
+             + _esc("\n".join(out)) + "</pre>")
+    return _pagina(corpo, papel=papel, nome=nome)
+
+
 # --------------------------------------------------------------------------- #
 # Balcao: cadastro de clientes/produtos + emissao de NF avulsa (Focus)
 # --------------------------------------------------------------------------- #
