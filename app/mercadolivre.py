@@ -92,8 +92,8 @@ def definir_apelido(user_id: str, apelido: str) -> None:
 # Apelido padrao por nickname do ML (os numeros da conta confundem a equipe).
 # Um apelido custom definido na tela ainda tem prioridade sobre estes.
 _APELIDO_PADRAO = {
-    "GS20251017104204": "Loja Nova",
-    "GRFICAEPAPELARIAAVAREENSEG": "Loja Antiga",
+    "GS20251017104204": "Loja Antiga",
+    "GRFICAEPAPELARIAAVAREENSEG": "Loja Nova",
 }
 
 
