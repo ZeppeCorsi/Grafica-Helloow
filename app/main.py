@@ -191,6 +191,7 @@ def _pagina(corpo: str, full: bool = False, ativo: str = "",
     if papel == "admin":
         admin_links = (lk("/whatsapp", "WhatsApp", "whatsapp")
                        + lk("/produtos", "Produtos", "produtos")
+                       + lk("/clientes", "Clientes", "clientes")
                        + lk("/balcao", "Balcao", "balcao")
                        + lk("/resultado", "Resultado", "resultado")
                        + lk("/financeiro", "Financeiro", "financeiro")
@@ -2007,6 +2008,11 @@ def produtos_page(request: Request, conta: str = "", pend: str = ""):
         "<input id='ap_cst' placeholder='CST/CSOSN' style='width:90px;padding:6px;border:1px solid #d7dade;border-radius:6px'/>"
         "<button type='button' class='btn ghost' onclick='aplicarFiscal()'>Aplicar</button>"
         "<span class='muted' style='font-size:12px'>Depois clique em <b>Salvar custos</b>.</span></div>"
+        "<details class='card'><summary style='cursor:pointer;font-weight:600'>"
+        "<i class='ti ti-box'></i> Produtos do balcao (venda fora do ML)</summary>"
+        "<p class='muted' style='font-size:13px'>Produtos cadastrados a mao para emitir NF no "
+        "balcao. Nao vem do Mercado Livre.</p>"
+        + _card_produtos_balcao(balcao.listar_produtos()) + "</details>"
         # filtros ficam FORA do form de salvar (formulario dentro de formulario quebra o envio)
         f"{resumo}{filtros}"
         "<form method='post' action='/produtos/salvar'>"
@@ -2883,6 +2889,129 @@ def _campo(nome, label, valor="", larg=160, ph=""):
             f"style='width:{larg}px;padding:7px;border:1px solid #d7dade;border-radius:7px'/></label>")
 
 
+def _card_clientes(clientes: list) -> str:
+    """Cadastro + lista de clientes (usado na aba Clientes)."""
+    linhas = ""
+    for c in clientes:
+        tel = c.get("telefone") or "&mdash;"
+        linhas += (
+            f"<tr><td>{_esc(c.get('nome') or '')}</td>"
+            f"<td><b>{_esc(tel)}</b></td>"
+            f"<td>{_esc((c.get('doc_tipo') or '') + ' ' + (c.get('doc_numero') or ''))}</td>"
+            f"<td>{_esc((c.get('cidade') or '') + '/' + (c.get('uf') or ''))}</td>"
+            f"<td><form method='post' action='/clientes/excluir' style='display:inline' "
+            f"onsubmit=\"return confirm('Excluir este cliente?')\">"
+            f"<input type='hidden' name='id' value='{c['id']}'/>"
+            "<button class='btn ghost' style='padding:2px 8px'>x</button></form></td></tr>")
+    if not linhas:
+        linhas = "<tr><td colspan='5' class='muted'>Nenhum cliente cadastrado ainda.</td></tr>"
+    form = (
+        "<form method='post' action='/clientes/salvar' style='display:flex;gap:8px;"
+        "flex-wrap:wrap;align-items:end;margin-bottom:14px'>"
+        + _campo("nome", "Nome / Razao social", larg=220)
+        + ("<label style='font-size:12px;color:#555'>Tipo<br><select name='doc_tipo' "
+           "style='padding:7px;border:1px solid #d7dade;border-radius:7px'>"
+           "<option value='CPF'>CPF</option><option value='CNPJ'>CNPJ</option></select></label>")
+        + _campo("doc_numero", "CPF/CNPJ", larg=150)
+        + _campo("telefone", "Telefone", larg=130, ph="(14) 99999-9999")
+        + _campo("ie", "Inscr. Estadual", larg=120)
+        + _campo("email", "E-mail", larg=180)
+        + _campo("cep", "CEP", larg=90)
+        + _campo("rua", "Rua", larg=200)
+        + _campo("numero", "Num", larg=60)
+        + _campo("complemento", "Compl.", larg=110)
+        + _campo("bairro", "Bairro", larg=130)
+        + _campo("cidade", "Cidade", larg=140)
+        + _campo("uf", "UF", larg=50)
+        + "<button class='btn'>Salvar cliente</button></form>")
+    return (form + "<table><tr><th>Nome</th><th>Telefone</th><th>Documento</th>"
+            "<th>Cidade</th><th></th></tr>" + linhas + "</table>")
+
+
+def _card_produtos_balcao(prods: list) -> str:
+    """Cadastro + lista de produtos do balcao (usado na aba Produtos)."""
+    linhas = ""
+    for p in prods:
+        linhas += (
+            f"<tr><td>{_esc(p.get('nome') or '')}</td><td>{_moeda(float(p.get('preco') or 0))}</td>"
+            f"<td class='muted' style='font-size:12px'>{_esc(p.get('ncm') or '')} &middot; "
+            f"{_esc(p.get('cfop') or '')} &middot; {_esc(p.get('cst') or '')}</td>"
+            f"<td><form method='post' action='/produtos/balcao/excluir' style='display:inline' "
+            f"onsubmit=\"return confirm('Excluir este produto?')\">"
+            f"<input type='hidden' name='id' value='{p['id']}'/>"
+            "<button class='btn ghost' style='padding:2px 8px'>x</button></form></td></tr>")
+    if not linhas:
+        linhas = "<tr><td colspan='4' class='muted'>Nenhum produto de balcao cadastrado ainda.</td></tr>"
+    form = (
+        "<form method='post' action='/produtos/balcao/salvar' style='display:flex;gap:8px;"
+        "flex-wrap:wrap;align-items:end;margin-bottom:14px'>"
+        + _campo("nome", "Produto", larg=220)
+        + _campo("preco", "Preco (R$)", larg=90, ph="0,00")
+        + _campo("ncm", "NCM", larg=90)
+        + _campo("cfop", "CFOP", larg=70)
+        + _campo("cst", "CST/CSOSN", larg=90)
+        + _campo("unidade", "Unid.", larg=60, ph="UN")
+        + _campo("origem", "Origem", larg=60, ph="0")
+        + "<button class='btn'>Salvar produto</button></form>")
+    return (form + "<table><tr><th>Produto</th><th>Preco</th>"
+            "<th>Fiscal (NCM &middot; CFOP &middot; CST)</th><th></th></tr>" + linhas + "</table>")
+
+
+@app.get("/clientes", response_class=HTMLResponse)
+def clientes_page(request: Request):
+    nome, papel = _atual(request)
+    if papel != "admin":
+        return RedirectResponse("/inbox")
+    corpo = (
+        "<link rel='stylesheet' href='https://cdn.jsdelivr.net/npm/"
+        "@tabler/icons-webfont@3.11.0/dist/tabler-icons.min.css'>"
+        "<h1>Clientes</h1>"
+        "<p class='muted'>Cadastro de clientes para emissao de Nota Fiscal no balcao "
+        "(e futuro atendimento). O telefone fica salvo para contato.</p>"
+        "<div class='card'>" + _card_clientes(balcao.listar_clientes()) + "</div>"
+    )
+    return _pagina(corpo, ativo="clientes", papel=papel, nome=nome)
+
+
+@app.post("/clientes/salvar")
+async def clientes_salvar(request: Request):
+    if _atual(request)[1] != "admin":
+        return RedirectResponse("/inbox")
+    form = await request.form()
+    dados = {k: (str(form.get(k) or "").strip()) for k in balcao._CAMPOS_CLI}
+    if dados.get("nome"):
+        balcao.salvar_cliente(dados)
+    return RedirectResponse("/clientes", status_code=303)
+
+
+@app.post("/clientes/excluir")
+async def clientes_excluir(request: Request, id: int = Form(...)):
+    if _atual(request)[1] != "admin":
+        return RedirectResponse("/inbox")
+    balcao.excluir_cliente(id)
+    return RedirectResponse("/clientes", status_code=303)
+
+
+@app.post("/produtos/balcao/salvar")
+async def produtos_balcao_salvar(request: Request):
+    if _atual(request)[1] != "admin":
+        return RedirectResponse("/inbox")
+    form = await request.form()
+    dados = {k: (str(form.get(k) or "").strip()) for k in balcao._CAMPOS_PROD}
+    dados["preco"] = _num(dados.get("preco") or "0", 0)
+    if dados.get("nome"):
+        balcao.salvar_produto(dados)
+    return RedirectResponse("/produtos", status_code=303)
+
+
+@app.post("/produtos/balcao/excluir")
+async def produtos_balcao_excluir(request: Request, id: int = Form(...)):
+    if _atual(request)[1] != "admin":
+        return RedirectResponse("/inbox")
+    balcao.excluir_produto(id)
+    return RedirectResponse("/produtos", status_code=303)
+
+
 @app.get("/balcao", response_class=HTMLResponse)
 def balcao_page(request: Request, msg: str = ""):
     nome, papel = _atual(request)
@@ -2945,117 +3074,22 @@ def balcao_page(request: Request, msg: str = ""):
                   "<table><tr><th>Status</th><th>Numero</th><th>Arquivos</th></tr>"
                   f"{linhas_nf}</table></div>")
 
-    # ---- Clientes ----
-    linhas_cli = ""
-    for c in clientes:
-        linhas_cli += (
-            f"<tr><td>{_esc(c.get('nome') or '')}</td>"
-            f"<td>{_esc((c.get('doc_tipo') or '') + ' ' + (c.get('doc_numero') or ''))}</td>"
-            f"<td>{_esc((c.get('cidade') or '') + '/' + (c.get('uf') or ''))}</td>"
-            f"<td><form method='post' action='/balcao/cliente/excluir' style='display:inline' "
-            f"onsubmit=\"return confirm('Excluir este cliente?')\">"
-            f"<input type='hidden' name='id' value='{c['id']}'/>"
-            "<button class='btn ghost' style='padding:2px 8px'>x</button></form></td></tr>")
-    if not linhas_cli:
-        linhas_cli = "<tr><td colspan='4' class='muted'>Nenhum cliente cadastrado.</td></tr>"
-    form_cli = (
-        "<form method='post' action='/balcao/cliente/salvar' style='display:flex;gap:8px;"
-        "flex-wrap:wrap;align-items:end;margin-bottom:12px'>"
-        + _campo("nome", "Nome / Razao social", larg=220)
-        + ("<label style='font-size:12px;color:#555'>Tipo<br><select name='doc_tipo' "
-           "style='padding:7px;border:1px solid #d7dade;border-radius:7px'>"
-           "<option value='CPF'>CPF</option><option value='CNPJ'>CNPJ</option></select></label>")
-        + _campo("doc_numero", "CPF/CNPJ", larg=150)
-        + _campo("ie", "Inscr. Estadual", larg=120)
-        + _campo("telefone", "Telefone", larg=120)
-        + _campo("cep", "CEP", larg=90)
-        + _campo("rua", "Rua", larg=200)
-        + _campo("numero", "Num", larg=60)
-        + _campo("complemento", "Compl.", larg=110)
-        + _campo("bairro", "Bairro", larg=130)
-        + _campo("cidade", "Cidade", larg=140)
-        + _campo("uf", "UF", larg=50)
-        + "<button class='btn'>Salvar cliente</button></form>")
-    card_cli = ("<div class='card'><h3 style='margin-top:0'>Clientes</h3>" + form_cli
-                + "<table><tr><th>Nome</th><th>Documento</th><th>Cidade</th><th></th></tr>"
-                + linhas_cli + "</table></div>")
-
-    # ---- Produtos (balcao) ----
-    linhas_prod = ""
-    for p in prods:
-        linhas_prod += (
-            f"<tr><td>{_esc(p.get('nome') or '')}</td><td>{_moeda(float(p.get('preco') or 0))}</td>"
-            f"<td class='muted' style='font-size:12px'>{_esc(p.get('ncm') or '')} &middot; "
-            f"{_esc(p.get('cfop') or '')} &middot; {_esc(p.get('cst') or '')}</td>"
-            f"<td><form method='post' action='/balcao/produto/excluir' style='display:inline' "
-            f"onsubmit=\"return confirm('Excluir este produto?')\">"
-            f"<input type='hidden' name='id' value='{p['id']}'/>"
-            "<button class='btn ghost' style='padding:2px 8px'>x</button></form></td></tr>")
-    if not linhas_prod:
-        linhas_prod = "<tr><td colspan='4' class='muted'>Nenhum produto de balcao cadastrado.</td></tr>"
-    form_prod = (
-        "<form method='post' action='/balcao/produto/salvar' style='display:flex;gap:8px;"
-        "flex-wrap:wrap;align-items:end;margin-bottom:12px'>"
-        + _campo("nome", "Produto", larg=220)
-        + _campo("preco", "Preco (R$)", larg=90, ph="0,00")
-        + _campo("ncm", "NCM", larg=90)
-        + _campo("cfop", "CFOP", larg=70)
-        + _campo("cst", "CST/CSOSN", larg=90)
-        + _campo("unidade", "Unid.", larg=60, ph="UN")
-        + _campo("origem", "Origem", larg=60, ph="0")
-        + "<button class='btn'>Salvar produto</button></form>")
-    card_prod = ("<div class='card'><h3 style='margin-top:0'>Produtos do balcao</h3>" + form_prod
-                 + "<table><tr><th>Produto</th><th>Preco</th><th>Fiscal (NCM &middot; CFOP &middot; CST)"
-                 "</th><th></th></tr>" + linhas_prod + "</table></div>")
+    atalhos = ("<div class='card' style='display:flex;gap:14px;flex-wrap:wrap;align-items:center'>"
+               "<span class='muted' style='font-size:13px'>Cadastros:</span>"
+               "<a class='btn ghost' href='/clientes'><i class='ti ti-users'></i> Clientes</a>"
+               "<a class='btn ghost' href='/produtos'><i class='ti ti-box'></i> Produtos do balcao</a>"
+               "</div>")
 
     corpo = (
         "<link rel='stylesheet' href='https://cdn.jsdelivr.net/npm/"
         "@tabler/icons-webfont@3.11.0/dist/tabler-icons.min.css'>"
         "<h1>Balcao</h1>"
-        "<p class='muted'>Cadastre <b>clientes</b> e <b>produtos</b> e emita a Nota Fiscal de "
-        "vendas fora do Mercado Livre (balcao). A emissao usa o provedor Focus NFe.</p>"
-        + aviso + card_emitir + card_notas + card_cli + card_prod
+        "<p class='muted'>Emita a Nota Fiscal de vendas fora do Mercado Livre. Escolha o "
+        "<b>cliente</b> e os <b>produtos</b> (cadastrados nas abas Clientes e Produtos) e emita. "
+        "A emissao usa o provedor Focus NFe.</p>"
+        + aviso + atalhos + card_emitir + card_notas
     )
     return _pagina(corpo, ativo="balcao", papel=papel, nome=nome)
-
-
-@app.post("/balcao/cliente/salvar")
-async def balcao_cliente_salvar(request: Request):
-    if _atual(request)[1] != "admin":
-        return RedirectResponse("/inbox")
-    form = await request.form()
-    dados = {k: (str(form.get(k) or "").strip()) for k in balcao._CAMPOS_CLI}
-    if dados.get("nome"):
-        balcao.salvar_cliente(dados)
-    return RedirectResponse("/balcao", status_code=303)
-
-
-@app.post("/balcao/cliente/excluir")
-async def balcao_cliente_excluir(request: Request, id: int = Form(...)):
-    if _atual(request)[1] != "admin":
-        return RedirectResponse("/inbox")
-    balcao.excluir_cliente(id)
-    return RedirectResponse("/balcao", status_code=303)
-
-
-@app.post("/balcao/produto/salvar")
-async def balcao_produto_salvar(request: Request):
-    if _atual(request)[1] != "admin":
-        return RedirectResponse("/inbox")
-    form = await request.form()
-    dados = {k: (str(form.get(k) or "").strip()) for k in balcao._CAMPOS_PROD}
-    dados["preco"] = _num(dados.get("preco") or "0", 0)
-    if dados.get("nome"):
-        balcao.salvar_produto(dados)
-    return RedirectResponse("/balcao", status_code=303)
-
-
-@app.post("/balcao/produto/excluir")
-async def balcao_produto_excluir(request: Request, id: int = Form(...)):
-    if _atual(request)[1] != "admin":
-        return RedirectResponse("/inbox")
-    balcao.excluir_produto(id)
-    return RedirectResponse("/balcao", status_code=303)
 
 
 @app.post("/balcao/emitir")
