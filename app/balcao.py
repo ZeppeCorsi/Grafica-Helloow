@@ -15,7 +15,7 @@ DATABASE_URL = os.getenv("DATABASE_URL", "")
 _ARQ_CLI = config.BASE_DIR / "clientes.json"
 _ARQ_PROD = config.BASE_DIR / "produtos_balcao.json"
 
-_CAMPOS_CLI = ("nome", "doc_tipo", "doc_numero", "ie", "email", "telefone",
+_CAMPOS_CLI = ("nome", "apelido", "doc_tipo", "doc_numero", "ie", "email", "telefone",
                "cep", "rua", "numero", "complemento", "bairro", "cidade", "uf")
 _CAMPOS_PROD = ("nome", "ncm", "cfop", "cst", "origem", "unidade", "preco")
 
@@ -36,9 +36,10 @@ if DATABASE_URL:
 
     def _init() -> None:
         _ddl("CREATE TABLE IF NOT EXISTS cliente (id SERIAL PRIMARY KEY, nome TEXT, "
-             "doc_tipo TEXT, doc_numero TEXT, ie TEXT, email TEXT, telefone TEXT, "
-             "cep TEXT, rua TEXT, numero TEXT, complemento TEXT, bairro TEXT, "
-             "cidade TEXT, uf TEXT)")
+             "apelido TEXT, doc_tipo TEXT, doc_numero TEXT, ie TEXT, email TEXT, "
+             "telefone TEXT, cep TEXT, rua TEXT, numero TEXT, complemento TEXT, "
+             "bairro TEXT, cidade TEXT, uf TEXT)")
+        _ddl("ALTER TABLE cliente ADD COLUMN IF NOT EXISTS apelido TEXT")
         _ddl("CREATE TABLE IF NOT EXISTS produto_balcao (id SERIAL PRIMARY KEY, nome TEXT, "
              "ncm TEXT, cfop TEXT, cst TEXT, origem TEXT, unidade TEXT, "
              "preco DOUBLE PRECISION)")

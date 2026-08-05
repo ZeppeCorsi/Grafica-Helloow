@@ -2894,8 +2894,10 @@ def _card_clientes(clientes: list) -> str:
     linhas = ""
     for c in clientes:
         tel = c.get("telefone") or "&mdash;"
+        apel = (f"<div class='muted' style='font-size:12px'>{_esc(c.get('apelido'))}</div>"
+                if c.get("apelido") else "")
         linhas += (
-            f"<tr><td>{_esc(c.get('nome') or '')}</td>"
+            f"<tr><td>{_esc(c.get('nome') or '')}{apel}</td>"
             f"<td><b>{_esc(tel)}</b></td>"
             f"<td>{_esc((c.get('doc_tipo') or '') + ' ' + (c.get('doc_numero') or ''))}</td>"
             f"<td>{_esc((c.get('cidade') or '') + '/' + (c.get('uf') or ''))}</td>"
@@ -2909,6 +2911,7 @@ def _card_clientes(clientes: list) -> str:
         "<form method='post' action='/clientes/salvar' style='display:flex;gap:8px;"
         "flex-wrap:wrap;align-items:end;margin-bottom:14px'>"
         + _campo("nome", "Nome / Razao social", larg=220)
+        + _campo("apelido", "Nome fantasia / apelido", larg=180)
         + ("<label style='font-size:12px;color:#555'>Tipo<br><select name='doc_tipo' "
            "style='padding:7px;border:1px solid #d7dade;border-radius:7px'>"
            "<option value='CPF'>CPF</option><option value='CNPJ'>CNPJ</option></select></label>")
