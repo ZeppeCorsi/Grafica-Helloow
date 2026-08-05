@@ -89,10 +89,20 @@ def definir_apelido(user_id: str, apelido: str) -> None:
     _cache_alias.pop(uid, None)
 
 
+# Apelido padrao por nickname do ML (os numeros da conta confundem a equipe).
+# Um apelido custom definido na tela ainda tem prioridade sobre estes.
+_APELIDO_PADRAO = {
+    "GS20251017104204": "Loja Nova",
+    "GRFICAEPAPELARIAAVAREENSEG": "Loja Antiga",
+}
+
+
 def nome_exibicao(acc: dict) -> str:
-    """Nome amigavel da loja: apelido custom > nickname do ML > user_id."""
+    """Nome amigavel da loja: apelido custom > apelido padrao > nickname > user_id."""
     uid = str(acc.get("user_id"))
-    return apelido_loja(uid) or acc.get("nickname") or uid
+    nick = acc.get("nickname") or ""
+    return (apelido_loja(uid) or _APELIDO_PADRAO.get(nick.upper())
+            or nick or uid)
 
 
 def seller_id(user_id: str | None = None) -> str | None:
