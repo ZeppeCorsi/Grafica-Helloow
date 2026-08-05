@@ -2528,12 +2528,23 @@ def conversa(request: Request, pack: str = "", conta: str = "", buyer: str = "",
 
     comprador = (o.get("buyer") or {}).get("nickname") or "Comprador"
     comp_id = buyer or str((o.get("buyer") or {}).get("id") or "")
-    its = o.get("order_items") or []
-    titulo = (its[0].get("item") or {}).get("title", "-") if its else "-"
-    total = o.get("total_amount", "-")
     loja = mercadolivre.nome_exibicao(acc)
     pack_id = str(o.get("pack_id") or "")
     oid = str(o.get("id") or "")
+
+    # pacote com varios pedidos do mesmo comprador -> mostra todos os itens juntos
+    pedidos_pack = [o]
+    if pack_id and pack_id != oid:
+        try:
+            pp = mercadolivre.orders_do_pack(pack_id, user_id=uid, token=acc)
+            if pp:
+                pedidos_pack = pp
+        except (RuntimeError, httpx.HTTPError):
+            pass
+    titulos = [(it.get("item") or {}).get("title") for ped in pedidos_pack
+               for it in (ped.get("order_items") or []) if (it.get("item") or {}).get("title")]
+    titulo = " + ".join(titulos) if titulos else "-"
+    total = sum(float(ped.get("total_amount") or 0) for ped in pedidos_pack)
 
     baloes = ""
     for m in mensagens:
@@ -2563,8 +2574,10 @@ def conversa(request: Request, pack: str = "", conta: str = "", buyer: str = "",
         f"<div style='flex:1'><div style='font-weight:600'>{comprador}</div>"
         f"<div class='muted' style='font-size:12px'>Mercado Livre &middot; {loja}</div></div>"
         f"{_badge_status(o.get('status'))}</div>"
-        f"<div class='ordbar'><span><i class='ti ti-package'></i> {titulo[:60]}</span>"
-        f"<span><i class='ti ti-cash'></i> R$ {total}</span>"
+        f"<div class='ordbar'><span><i class='ti ti-package'></i> {_esc(titulo[:90])}"
+        + (f" <b>({len(pedidos_pack)} pedidos no pacote)</b>" if len(pedidos_pack) > 1 else "")
+        + "</span>"
+        f"<span><i class='ti ti-cash'></i> {_moeda(total)}</span>"
         + (f"<span style='color:#A15C00;font-weight:500'><i class='ti ti-truck'></i> "
            f"Enviar ate {_data_br(env.get('enviar_ate'))}</span>" if env.get("enviar_ate") else "")
         + (f"<span>{_badge_envio(env.get('envio_status'))}</span>" if env.get("envio_status") else "")
@@ -3154,7 +3167,20 @@ def pedido_imprimir(request: Request, pack: str = "", conta: str = ""):
     comprador = (o.get("buyer") or {}).get("nickname") or "-"
     oid = str(o.get("id") or "")
     pack_id = str(o.get("pack_id") or "")
-    codigo = oid + (f" &middot; pacote {pack_id}" if pack_id and pack_id != oid else "")
+
+    # pacote com varios pedidos do mesmo comprador -> imprime todos juntos
+    if pack_id and pack_id != oid:
+        try:
+            pedidos = mercadolivre.orders_do_pack(pack_id, user_id=uid, token=acc) or [o]
+        except (RuntimeError, httpx.HTTPError):
+            pedidos = [o]
+    else:
+        pedidos = [o]
+    varios = len(pedidos) > 1
+
+    ids = " + ".join(str(p.get("id") or "") for p in pedidos)
+    codigo = (f"pacote {pack_id}" if varios else oid) + (
+        f"<div class='muted' style='font-size:11px;color:#888'>{ids}</div>" if varios else "")
     data = _data_br(o.get("date_created"))
 
     # bloco do cliente (nome/endereco do envio quando houver)
@@ -3172,22 +3198,25 @@ def pedido_imprimir(request: Request, pack: str = "", conta: str = ""):
 
     rows = ""
     n_itens = soma_qtd = 0
-    total_ped = float(o.get("total_amount") or 0)
-    for it in (o.get("order_items") or []):
-        item = it.get("item") or {}
-        desc = item.get("title") or "-"
-        cod = item.get("seller_custom_field") or item.get("id") or "-"
-        qtd = float(it.get("quantity") or 0)
-        unit = float(it.get("unit_price") or 0)
-        n_itens += 1
-        soma_qtd += qtd
-        rows += (f"<tr><td>{_esc(desc)}</td><td>{_esc(str(cod))}</td><td>UN</td>"
-                 f"<td style='text-align:center'>{qtd:g}</td>"
-                 f"<td style='text-align:right'>{_moeda(unit)}</td>"
-                 f"<td style='text-align:right'>{_moeda(qtd * unit)}</td></tr>")
+    total_ped = 0.0
+    for ped in pedidos:
+        total_ped += float(ped.get("total_amount") or 0)
+        for it in (ped.get("order_items") or []):
+            item = it.get("item") or {}
+            desc = item.get("title") or "-"
+            cod = item.get("seller_custom_field") or item.get("id") or "-"
+            qtd = float(it.get("quantity") or 0)
+            unit = float(it.get("unit_price") or 0)
+            n_itens += 1
+            soma_qtd += qtd
+            rows += (f"<tr><td>{_esc(desc)}</td><td>{_esc(str(cod))}</td><td>UN</td>"
+                     f"<td style='text-align:center'>{qtd:g}</td>"
+                     f"<td style='text-align:right'>{_moeda(unit)}</td>"
+                     f"<td style='text-align:right'>{_moeda(qtd * unit)}</td></tr>")
 
+    titulo_doc = f"Pacote {pack_id}" if varios else f"Pedido {oid}"
     html = f"""<!doctype html><html lang='pt-br'><meta charset='utf-8'>
-<title>Pedido {oid}</title><style>
+<title>{titulo_doc}</title><style>
 @media print {{ .noprint {{ display:none !important }} body {{ margin:0 }} }}
 body {{ font-family: Arial, Helvetica, sans-serif; color:#222; max-width:820px;
        margin:20px auto; padding:0 24px; font-size:13px }}
@@ -3217,11 +3246,11 @@ td {{ padding:8px; border-bottom:1px solid #eee }}
   <div><div style='font-size:18px;font-weight:700'>{_esc(empresa_nome)}</div></div>
   <div class='emp'>{empresa_info}</div>
 </div>
-<h1 class='tt'>Pedido {oid}</h1>
+<h1 class='tt'>{titulo_doc}</h1>
 <div class='grid'>
   <div class='box'><div class='lbl'>Cliente</div>{cliente_html}</div>
   <div class='box' style='max-width:280px'>
-    <div class='lbl'>Numero do pedido</div><b>{codigo}</b>
+    <div class='lbl'>{"Pedidos do pacote" if varios else "Numero do pedido"}</div><b>{codigo}</b>
     <div class='lbl' style='margin-top:6px'>Data do pedido</div>{data}
     <div class='lbl' style='margin-top:6px'>Enviar ate</div>{_data_br(env.get('enviar_ate')) if env.get('enviar_ate') else '-'}
     <div class='lbl' style='margin-top:6px'>Loja</div>{_esc(mercadolivre.nome_exibicao(acc))}
@@ -3235,7 +3264,7 @@ td {{ padding:8px; border-bottom:1px solid #eee }}
 </table>
 <div class='tot'>
   N&ordm; de itens: {n_itens} &nbsp;&middot;&nbsp; Soma das qtds: {soma_qtd:g}<br>
-  <b>Total do pedido: {_moeda(total_ped)}</b>
+  <b>{"Total do pacote" if varios else "Total do pedido"}: {_moeda(total_ped)}</b>
 </div>
 <div class='ft'>Gerado pelo Zappe Hub</div>
 </html>"""

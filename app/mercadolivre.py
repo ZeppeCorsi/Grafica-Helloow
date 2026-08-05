@@ -501,6 +501,22 @@ def pedido_do_pack(pack_id: str, user_id: str | None = None,
     return obter_pedido(str(ords[0].get("id")), user_id=user_id, token=token)
 
 
+def orders_do_pack(pack_id: str, user_id: str | None = None,
+                   token: dict | None = None) -> list[dict]:
+    """TODOS os pedidos de dentro de um pack (carrinho com varios pedidos do
+    mesmo comprador). Lista vazia se nao for um pack desta conta."""
+    try:
+        pk = get(f"/packs/{pack_id}", user_id=user_id, token=token)
+    except httpx.HTTPStatusError:
+        return []
+    out = []
+    for od in pk.get("orders") or []:
+        full = obter_pedido(str(od.get("id")), user_id=user_id, token=token)
+        if full:
+            out.append(full)
+    return out
+
+
 def buscar_pedido_cod(codigo: str, contas_lista: list[dict]) -> tuple:
     """Acha um pedido pelo codigo (de pedido OU de pacote) em qualquer conta. Retorna (pedido, uid)."""
     agora = time.time()
