@@ -3132,20 +3132,44 @@ def balcao_page(request: Request, msg: str = ""):
                   f"<select name='prod' style='flex:1;padding:7px;border:1px solid #d7dade;border-radius:7px'>{opt_prod}</select>"
                   "<input name='qtd' value='1' inputmode='decimal' style='width:70px;padding:7px;"
                   "border:1px solid #d7dade;border-radius:7px'/></div>")
-    emitir_btn = ("<button class='btn'>Emitir NF do balcao</button>" if nfe.configurado()
-                  else "<button class='btn' disabled title='Configure o Focus NFe'>Emitir NF do balcao</button>")
+    finalizar_btn = ("<button class='btn' formaction='/balcao/finalizar'>"
+                     "<i class='ti ti-check'></i> Finalizar pedido</button>")
+    emitir_btn = ("<button class='btn ghost' formaction='/balcao/emitir'>"
+                  "<i class='ti ti-file-invoice'></i> Emitir NF</button>" if nfe.configurado()
+                  else "<button class='btn ghost' formaction='/balcao/emitir' disabled "
+                  "title='Configure o Focus NFe'><i class='ti ti-file-invoice'></i> Emitir NF</button>")
     card_emitir = (
-        "<div class='card'><h3 style='margin-top:0'>Emitir NF do balcao</h3>"
-        "<form method='post' action='/balcao/emitir'>"
+        "<div class='card'><h3 style='margin-top:0'>Venda no balcao</h3>"
+        "<form method='post' action='/balcao/finalizar'>"
         "<div style='margin-bottom:10px'><select name='cliente_id' required "
         "style='padding:8px;border:1px solid #d7dade;border-radius:8px;min-width:280px'>"
         + opt_cli + "</select></div>"
         "<div id='itens'>" + linha_item + "</div>"
-        "<button type='button' class='btn ghost' onclick='addItem()' style='margin:4px 0 12px'>"
-        "+ item</button><br>" + emitir_btn + "</form></div>"
+        "<button type='button' class='btn ghost' onclick='addItem()' style='margin:4px 0 10px'>"
+        "+ item</button>"
+        "<div style='margin:6px 0 12px'>"
+        "<label class='muted' style='font-size:13px'>Observacao</label>"
+        "<textarea name='observacao' rows='2' placeholder='Ex.: retirar 2a feira, arte aprovada, "
+        "pago no pix...' style='width:100%;padding:8px;border:1px solid #d7dade;border-radius:8px;"
+        "resize:vertical;box-sizing:border-box'></textarea></div>"
+        "<div style='display:flex;gap:10px;flex-wrap:wrap'>" + finalizar_btn + emitir_btn + "</div>"
+        "</form></div>"
         "<script>function addItem(){var c=document.getElementById('itens');"
         "var n=c.firstElementChild.cloneNode(true);c.appendChild(n);}</script>"
     )
+
+    # ---- Pedidos finalizados no balcao (reimprimir) ----
+    linhas_ped = ""
+    for pd in balcao.listar_pedidos(30):
+        linhas_ped += (f"<tr><td>#{pd['id']}</td><td>{_esc(pd.get('cliente_nome') or '-')}</td>"
+                       f"<td>{_moeda(float(pd.get('total') or 0))}</td>"
+                       f"<td><a href='/balcao/imprimir?id={pd['id']}' target='_blank'>"
+                       "<i class='ti ti-printer'></i> imprimir</a></td></tr>")
+    if not linhas_ped:
+        linhas_ped = "<tr><td colspan='4' class='muted'>Nenhum pedido finalizado ainda.</td></tr>"
+    card_pedidos = ("<div class='card'><h3 style='margin-top:0'>Pedidos do balcao</h3>"
+                    "<table><tr><th>#</th><th>Cliente</th><th>Total</th><th></th></tr>"
+                    + linhas_ped + "</table></div>")
 
     # ---- Notas emitidas no balcao ----
     linhas_nf = ""
@@ -3175,10 +3199,10 @@ def balcao_page(request: Request, msg: str = ""):
         "<link rel='stylesheet' href='https://cdn.jsdelivr.net/npm/"
         "@tabler/icons-webfont@3.11.0/dist/tabler-icons.min.css'>"
         "<h1>Balcao</h1>"
-        "<p class='muted'>Emita a Nota Fiscal de vendas fora do Mercado Livre. Escolha o "
-        "<b>cliente</b> e os <b>produtos</b> (cadastrados nas abas Clientes e Produtos) e emita. "
-        "A emissao usa o provedor Focus NFe.</p>"
-        + aviso + atalhos + card_emitir + card_notas
+        "<p class='muted'>Venda fora do Mercado Livre. Escolha o <b>cliente</b> e os "
+        "<b>produtos</b> (cadastrados nas abas Clientes e Produtos), adicione uma observacao e "
+        "clique em <b>Finalizar pedido</b> para imprimir. A <b>NF</b> usa o provedor Focus NFe.</p>"
+        + aviso + atalhos + card_emitir + card_pedidos + card_notas
     )
     return _pagina(corpo, ativo="balcao", papel=papel, nome=nome)
 
@@ -3208,6 +3232,141 @@ async def balcao_emitir(request: Request):
     except Exception as e:
         msg = f"Nao consegui emitir agora: {e}"
     return RedirectResponse("/balcao?msg=" + quote(msg), status_code=303)
+
+
+@app.post("/balcao/finalizar")
+async def balcao_finalizar(request: Request):
+    """Finaliza a venda do balcao: salva o pedido e abre a impressao."""
+    nome, papel = _atual(request)
+    form = await request.form()
+    cli = balcao.obter_cliente(int(form.get("cliente_id") or 0)) or {}
+    obs = str(form.get("observacao") or "").strip()
+    itens = []
+    total = 0.0
+    for pid, q in zip(form.getlist("prod"), form.getlist("qtd")):
+        if not str(pid).strip():
+            continue
+        p = balcao.obter_produto(int(pid))
+        if not p:
+            continue
+        qtd = float(_num(str(q or "1"), 1)) or 1
+        preco = float(p.get("preco") or 0)
+        total += preco * qtd
+        itens.append({"nome": p.get("nome"), "preco": preco, "qtd": qtd,
+                      "unidade": p.get("unidade") or "UN", "ncm": p.get("ncm"),
+                      "cfop": p.get("cfop"), "cst": p.get("cst")})
+    if not cli or not itens:
+        return RedirectResponse("/balcao?msg=" + quote("Escolha um cliente e ao menos um produto."),
+                                status_code=303)
+    pid = balcao.salvar_pedido({"cliente_id": cli.get("id"), "cliente_nome": cli.get("nome"),
+                                "observacao": obs, "total": round(total, 2), "itens": itens,
+                                "atendente": nome or "?"})
+    usuarios.registrar(nome or "?", "balcao_pedido", str(pid))
+    return RedirectResponse(f"/balcao/imprimir?id={pid}", status_code=303)
+
+
+@app.get("/balcao/imprimir", response_class=HTMLResponse)
+def balcao_imprimir(request: Request, id: int = 0):
+    """Impressao do pedido de balcao (mesmo estilo dos pedidos do ML)."""
+    pedido = balcao.obter_pedido(id)
+    if not pedido:
+        return HTMLResponse("<p style='font-family:Arial'>Pedido nao encontrado. "
+                            "<a href='/balcao'>Voltar</a></p>")
+    cli = (balcao.obter_cliente(pedido.get("cliente_id")) if pedido.get("cliente_id") else {}) or {}
+
+    emp = store.carregar("empresa") or {}
+    contas = mercadolivre.contas()
+    empresa_nome = emp.get("nome") or (mercadolivre.nome_exibicao(contas[0]) if contas else "Zappe Hub")
+    empresa_info = "".join(
+        f"<div>{_esc(v)}</div>" for v in
+        [emp.get("endereco", ""), emp.get("cnpj", ""), emp.get("telefone", "")] if v)
+
+    linhas_cli = [f"<b>{_esc(cli.get('nome') or pedido.get('cliente_nome') or '-')}</b>"]
+    if cli.get("doc_numero"):
+        linhas_cli.append(_esc(f"{cli.get('doc_tipo','')} {cli.get('doc_numero','')}".strip()))
+    if cli.get("rua"):
+        end = f"{cli.get('rua','')}, {cli.get('numero','')}"
+        if cli.get("complemento"):
+            end += f" - {cli['complemento']}"
+        linhas_cli.append(_esc(end))
+        linhas_cli.append(_esc(f"{cli.get('bairro','')} - {cli.get('cidade','')}/"
+                               f"{cli.get('uf','')} - CEP {cli.get('cep','')}"))
+    if cli.get("telefone"):
+        linhas_cli.append(_esc(f"Fone: {cli['telefone']}"))
+    cliente_html = "<br>".join(linhas_cli)
+
+    rows = ""
+    n_itens = soma_qtd = 0
+    for it in pedido.get("itens") or []:
+        qtd = float(it.get("qtd") or 0)
+        unit = float(it.get("preco") or 0)
+        n_itens += 1
+        soma_qtd += qtd
+        rows += (f"<tr><td>{_esc(it.get('nome') or '-')}</td><td>{_esc(it.get('unidade') or 'UN')}</td>"
+                 f"<td style='text-align:center'>{qtd:g}</td>"
+                 f"<td style='text-align:right'>{_moeda(unit)}</td>"
+                 f"<td style='text-align:right'>{_moeda(qtd * unit)}</td></tr>")
+
+    obs_html = ""
+    if pedido.get("observacao"):
+        obs_html = ("<div class='box' style='margin-top:16px'><div class='lbl'>Observacao</div>"
+                    f"{_esc(pedido['observacao'])}</div>")
+    data = _data_br(datetime.fromtimestamp(pedido.get("criado_em") or 0).isoformat())
+
+    html = f"""<!doctype html><html lang='pt-br'><meta charset='utf-8'>
+<title>Pedido balcao #{pedido['id']}</title><style>
+@media print {{ .noprint {{ display:none !important }} body {{ margin:0 }} }}
+body {{ font-family: Arial, Helvetica, sans-serif; color:#222; max-width:820px;
+       margin:20px auto; padding:0 24px; font-size:13px }}
+.bar {{ display:flex; gap:10px; margin-bottom:18px }}
+.btn {{ background:#2D3277; color:#fff; border:none; padding:10px 18px; border-radius:8px;
+       font-size:14px; cursor:pointer; text-decoration:none }}
+.btn.g {{ background:#fff; border:1px solid #cfd3da; color:#333 }}
+.head {{ display:flex; justify-content:space-between; align-items:flex-start;
+        border-bottom:2px solid #333; padding-bottom:12px }}
+.head .emp {{ text-align:right; font-size:12px; color:#444; line-height:1.5 }}
+h1.tt {{ text-align:center; font-size:20px; margin:18px 0 }}
+.grid {{ display:flex; gap:14px }}
+.box {{ border:1px solid #cfd3da; border-radius:6px; padding:10px 12px; flex:1; line-height:1.6 }}
+.box .lbl {{ color:#888; font-size:11px; text-transform:uppercase }}
+table {{ width:100%; border-collapse:collapse; margin-top:16px; font-size:12.5px }}
+th {{ background:#f2f3f5; text-align:left; padding:8px; border-bottom:1px solid #ccc }}
+td {{ padding:8px; border-bottom:1px solid #eee }}
+.tot {{ margin-top:12px; text-align:right; line-height:1.8 }}
+.tot b {{ font-size:15px }}
+.ft {{ margin-top:26px; text-align:center; color:#9aa2ad; font-size:11px }}
+</style>
+<div class='bar noprint'>
+  <button class='btn' onclick='window.print()'>&#128424; Imprimir / Salvar PDF</button>
+  <a class='btn g' href='/balcao'>Voltar ao balcao</a>
+</div>
+<div class='head'>
+  <div><div style='font-size:18px;font-weight:700'>{_esc(empresa_nome)}</div></div>
+  <div class='emp'>{empresa_info}</div>
+</div>
+<h1 class='tt'>Pedido de balcao #{pedido['id']}</h1>
+<div class='grid'>
+  <div class='box'><div class='lbl'>Cliente</div>{cliente_html}</div>
+  <div class='box' style='max-width:280px'>
+    <div class='lbl'>Numero do pedido</div><b>#{pedido['id']}</b>
+    <div class='lbl' style='margin-top:6px'>Data</div>{data}
+    <div class='lbl' style='margin-top:6px'>Atendente</div>{_esc(pedido.get('atendente') or '-')}
+  </div>
+</div>
+<table>
+  <tr><th>Descricao do produto</th><th>Un.</th>
+      <th style='text-align:center'>Qtd</th><th style='text-align:right'>Valor unit.</th>
+      <th style='text-align:right'>Valor total</th></tr>
+  {rows}
+</table>
+{obs_html}
+<div class='tot'>
+  N&ordm; de itens: {n_itens} &nbsp;&middot;&nbsp; Soma das qtds: {soma_qtd:g}<br>
+  <b>Total do pedido: {_moeda(float(pedido.get('total') or 0))}</b>
+</div>
+<div class='ft'>Gerado pelo Zappe Hub</div>
+</html>"""
+    return HTMLResponse(html)
 
 
 @app.get("/imprimir", response_class=HTMLResponse)

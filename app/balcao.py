@@ -8,12 +8,14 @@ Banco na nuvem (DATABASE_URL) ou arquivo local (clientes.json / produtos_balcao.
 """
 import json
 import os
+import time
 
 from . import config
 
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 _ARQ_CLI = config.BASE_DIR / "clientes.json"
 _ARQ_PROD = config.BASE_DIR / "produtos_balcao.json"
+_ARQ_PED = config.BASE_DIR / "pedidos_balcao.json"
 
 _CAMPOS_CLI = ("nome", "apelido", "doc_tipo", "doc_numero", "ie", "email", "telefone",
                "cep", "rua", "numero", "complemento", "bairro", "cidade", "uf")
@@ -43,8 +45,45 @@ if DATABASE_URL:
         _ddl("CREATE TABLE IF NOT EXISTS produto_balcao (id SERIAL PRIMARY KEY, nome TEXT, "
              "ncm TEXT, cfop TEXT, cst TEXT, origem TEXT, unidade TEXT, "
              "preco DOUBLE PRECISION)")
+        _ddl("CREATE TABLE IF NOT EXISTS pedido_balcao (id SERIAL PRIMARY KEY, "
+             "cliente_id INTEGER, cliente_nome TEXT, observacao TEXT, "
+             "total DOUBLE PRECISION, itens TEXT, atendente TEXT, "
+             "criado_em DOUBLE PRECISION)")
 
     _init()
+
+    _PED_COLS = ["id", "cliente_id", "cliente_nome", "observacao", "total",
+                 "itens", "atendente", "criado_em"]
+
+    def _salvar_pedido(dados: dict) -> int:
+        with _conn() as c, c.cursor() as cur:
+            cur.execute("INSERT INTO pedido_balcao (cliente_id, cliente_nome, observacao, "
+                        "total, itens, atendente, criado_em) VALUES (%s,%s,%s,%s,%s,%s,%s) "
+                        "RETURNING id",
+                        (dados.get("cliente_id"), dados.get("cliente_nome"),
+                         dados.get("observacao"), dados.get("total"),
+                         json.dumps(dados.get("itens") or []), dados.get("atendente"),
+                         time.time()))
+            pid = cur.fetchone()[0]
+            c.commit()
+        return pid
+
+    def _obter_pedido(pid: int) -> dict | None:
+        with _conn() as c, c.cursor() as cur:
+            cur.execute(f"SELECT {','.join(_PED_COLS)} FROM pedido_balcao WHERE id=%s", (pid,))
+            r = cur.fetchone()
+        if not r:
+            return None
+        d = dict(zip(_PED_COLS, r))
+        d["itens"] = json.loads(d["itens"]) if d.get("itens") else []
+        return d
+
+    def _listar_pedidos(limite: int) -> list[dict]:
+        with _conn() as c, c.cursor() as cur:
+            cur.execute("SELECT id, cliente_nome, total, criado_em FROM pedido_balcao "
+                        "ORDER BY criado_em DESC LIMIT %s", (limite,))
+            return [dict(zip(["id", "cliente_nome", "total", "criado_em"], r))
+                    for r in cur.fetchall()]
 
     def _listar(tab: str, campos: tuple) -> list[dict]:
         cols = ",".join(("id",) + campos)
@@ -121,6 +160,26 @@ else:
         d["itens"] = [x for x in d["itens"] if x["id"] != int(oid)]
         _save(arq, d)
 
+    def _salvar_pedido(dados: dict) -> int:
+        d = _load(_ARQ_PED)
+        d["seq"] += 1
+        d["itens"].append({
+            "id": d["seq"], "cliente_id": dados.get("cliente_id"),
+            "cliente_nome": dados.get("cliente_nome"), "observacao": dados.get("observacao"),
+            "total": dados.get("total"), "itens": dados.get("itens") or [],
+            "atendente": dados.get("atendente"), "criado_em": time.time(),
+        })
+        _save(_ARQ_PED, d)
+        return d["seq"]
+
+    def _obter_pedido(pid: int) -> dict | None:
+        return next((x for x in _load(_ARQ_PED)["itens"] if x["id"] == int(pid)), None)
+
+    def _listar_pedidos(limite: int) -> list[dict]:
+        regs = sorted(_load(_ARQ_PED)["itens"], key=lambda x: x.get("criado_em") or 0,
+                      reverse=True)
+        return regs[:limite]
+
 
 # --------------------------------------------------------------------------- #
 # API do modulo
@@ -155,3 +214,15 @@ def salvar_produto(dados: dict) -> int:
 
 def excluir_produto(pid: int) -> None:
     _excluir("produto_balcao", pid)
+
+
+def salvar_pedido(dados: dict) -> int:
+    return _salvar_pedido(dados)
+
+
+def obter_pedido(pid: int) -> dict | None:
+    return _obter_pedido(pid)
+
+
+def listar_pedidos(limite: int = 50) -> list[dict]:
+    return _listar_pedidos(limite)

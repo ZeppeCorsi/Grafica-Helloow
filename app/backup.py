@@ -28,6 +28,7 @@ _TABELAS = [
     ("nota_fiscal", "ref"),
     ("cliente", "id"),
     ("produto_balcao", "id"),
+    ("pedido_balcao", "id"),
 ]
 
 
@@ -96,7 +97,8 @@ else:
         dump: dict = {"versao": 1, "arquivos": {}}
         nomes = ["produtos_custo.json", "fluxos.json", "categorias.json",
                  "usuarios.json", "custos_fixos.json", "ia_consumo.json",
-                 "notas_fiscais.json", "clientes.json", "produtos_balcao.json"]
+                 "notas_fiscais.json", "clientes.json", "produtos_balcao.json",
+                 "pedidos_balcao.json"]
         # + arquivos de configuracao do store (token_*.json), menos tokens de acesso
         for p in config.BASE_DIR.glob("token_*.json"):
             if p.name != "token.json" and not p.name.startswith("token_ml_"):
