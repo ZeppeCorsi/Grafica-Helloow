@@ -187,12 +187,13 @@ def _pagina(corpo: str, full: bool = False, ativo: str = "",
             papel: str = "", nome: str = "") -> HTMLResponse:
     def lk(href, label, key):
         return f"<a href='{href}' class='{'on' if ativo == key else ''}'>{label}</a>"
+    # areas liberadas para todos os usuarios logados (admin + atendente)
+    todos_extra = (lk("/produtos", "Produtos", "produtos")
+                   + lk("/clientes", "Clientes", "clientes")
+                   + lk("/balcao", "Balcao", "balcao"))
     admin_links = ""
     if papel == "admin":
         admin_links = (lk("/whatsapp", "WhatsApp", "whatsapp")
-                       + lk("/produtos", "Produtos", "produtos")
-                       + lk("/clientes", "Clientes", "clientes")
-                       + lk("/balcao", "Balcao", "balcao")
                        + lk("/resultado", "Resultado", "resultado")
                        + lk("/financeiro", "Financeiro", "financeiro")
                        + lk("/usuarios", "Equipe", "usuarios")
@@ -207,6 +208,7 @@ def _pagina(corpo: str, full: bool = False, ativo: str = "",
         + lk("/inbox", "Caixa de entrada", "inbox")
         + lk("/perguntas", "Perguntas", "perguntas")
         + lk("/vendas?atend=__none__", "Pedidos", "vendas")
+        + todos_extra
         + admin_links
         + user_chip
         + ("<a href='/sair'>Sair</a>" if config.APP_PASSWORD else "")
@@ -1860,8 +1862,6 @@ def _val_input(v) -> str:
 @app.get("/produtos", response_class=HTMLResponse)
 def produtos_page(request: Request, conta: str = "", pend: str = ""):
     nome, papel = _atual(request)
-    if papel != "admin":
-        return RedirectResponse("/inbox")
 
     contas = mercadolivre.contas()
     if not contas:
@@ -2026,8 +2026,6 @@ def produtos_page(request: Request, conta: str = "", pend: str = ""):
 
 @app.post("/produtos/salvar")
 async def produtos_salvar(request: Request):
-    if _atual(request)[1] != "admin":
-        return RedirectResponse("/inbox")
     form = await request.form()
     mapa: dict = {}
     fiscal: dict = {}
@@ -2052,8 +2050,6 @@ async def produtos_salvar(request: Request):
 @app.get("/produtos/planilha")
 def produtos_planilha(request: Request):
     """Baixa uma planilha (CSV) de todos os anuncios com preco, custo e margem."""
-    if _atual(request)[1] != "admin":
-        return RedirectResponse("/inbox")
     custos = produtos.custos()
     buf = io.StringIO()
     buf.write("﻿")  # BOM: Excel abre com acentos certos
@@ -3067,8 +3063,6 @@ def _card_produtos_balcao(prods: list) -> str:
 @app.get("/clientes", response_class=HTMLResponse)
 def clientes_page(request: Request):
     nome, papel = _atual(request)
-    if papel != "admin":
-        return RedirectResponse("/inbox")
     corpo = (
         "<link rel='stylesheet' href='https://cdn.jsdelivr.net/npm/"
         "@tabler/icons-webfont@3.11.0/dist/tabler-icons.min.css'>"
@@ -3082,8 +3076,6 @@ def clientes_page(request: Request):
 
 @app.post("/clientes/salvar")
 async def clientes_salvar(request: Request):
-    if _atual(request)[1] != "admin":
-        return RedirectResponse("/inbox")
     form = await request.form()
     dados = {k: (str(form.get(k) or "").strip()) for k in balcao._CAMPOS_CLI}
     if dados.get("nome"):
@@ -3093,16 +3085,12 @@ async def clientes_salvar(request: Request):
 
 @app.post("/clientes/excluir")
 async def clientes_excluir(request: Request, id: int = Form(...)):
-    if _atual(request)[1] != "admin":
-        return RedirectResponse("/inbox")
     balcao.excluir_cliente(id)
     return RedirectResponse("/clientes", status_code=303)
 
 
 @app.post("/produtos/balcao/salvar")
 async def produtos_balcao_salvar(request: Request):
-    if _atual(request)[1] != "admin":
-        return RedirectResponse("/inbox")
     form = await request.form()
     dados = {k: (str(form.get(k) or "").strip()) for k in balcao._CAMPOS_PROD}
     dados["preco"] = _num(dados.get("preco") or "0", 0)
@@ -3113,8 +3101,6 @@ async def produtos_balcao_salvar(request: Request):
 
 @app.post("/produtos/balcao/excluir")
 async def produtos_balcao_excluir(request: Request, id: int = Form(...)):
-    if _atual(request)[1] != "admin":
-        return RedirectResponse("/inbox")
     balcao.excluir_produto(id)
     return RedirectResponse("/produtos", status_code=303)
 
@@ -3122,8 +3108,6 @@ async def produtos_balcao_excluir(request: Request, id: int = Form(...)):
 @app.get("/balcao", response_class=HTMLResponse)
 def balcao_page(request: Request, msg: str = ""):
     nome, papel = _atual(request)
-    if papel != "admin":
-        return RedirectResponse("/inbox")
     clientes = balcao.listar_clientes()
     prods = balcao.listar_produtos()
 
@@ -3202,8 +3186,6 @@ def balcao_page(request: Request, msg: str = ""):
 @app.post("/balcao/emitir")
 async def balcao_emitir(request: Request):
     nome, papel = _atual(request)
-    if papel != "admin":
-        return RedirectResponse("/inbox")
     form = await request.form()
     cli = balcao.obter_cliente(int(form.get("cliente_id") or 0)) or {}
     prod_ids = form.getlist("prod")
