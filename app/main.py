@@ -1478,56 +1478,132 @@ def resultado_config_salvar(request: Request, custo_pct: str = Form("20"),
     return RedirectResponse("/resultado", status_code=303)
 
 
-def _calc_resultado(de: str, ate: str, cfg: dict):
-    """Percorre os pedidos do periodo e devolve (linhas_html, totais, n_pedidos).
-    Usado pela aba Resultado (tabela) e pelo Fechamento (so os totais)."""
+def _tot0() -> dict:
+    return {"venda": 0.0, "com": 0.0, "frete": 0.0, "arec": 0.0,
+            "custo": 0.0, "imp": 0.0, "liq": 0.0}
+
+
+def _linha_e_totais_ml(o: dict, cfg: dict, custos_prod: dict):
+    """Uma linha da tabela + os totais de UM pedido do Mercado Livre."""
+    venda = float(o.get("total_amount") or 0)
+    if not venda:
+        venda = sum(float(it.get("unit_price") or 0) * float(it.get("quantity") or 0)
+                    for it in (o.get("order_items") or []))
+    comissao = sum(float(it.get("sale_fee") or 0) for it in (o.get("order_items") or []))
+    frete = cfg["frete"]
+    a_receber = venda - comissao - frete  # o que o ML deposita
+    # custo: custo REAL do produto (aba Produtos) quando preenchido; senao, % configurado.
+    custo = 0.0
+    for it in (o.get("order_items") or []):
+        qtd = float(it.get("quantity") or 0)
+        venda_it = float(it.get("unit_price") or 0) * qtd
+        item_id = str((it.get("item") or {}).get("id") or "")
+        real = custos_prod.get(item_id)
+        custo += (real * qtd) if real is not None else (venda_it * cfg["custo_pct"] / 100)
+    imposto = venda * cfg["imposto_pct"] / 100
+    liquido = a_receber - custo - imposto
+    margem = (liquido / venda * 100) if venda else 0
+    cor = "#0F6E56" if liquido >= 0 else "#A32D2D"
+    itens_ped = o.get("order_items") or []
+    titulo = (itens_ped[0].get("item") or {}).get("title", "-") if itens_ped else "-"
+    linha = (
+        f"<tr><td>{_data_br(o.get('date_created'))}</td><td>{o.get('id','-')}</td>"
+        f"<td>{titulo[:32]}</td><td>{_moeda(venda)}</td><td>{_moeda(comissao)}</td>"
+        f"<td>{_moeda(frete)}</td><td style='font-weight:500'>{_moeda(a_receber)}</td>"
+        f"<td>{_moeda(custo)}</td><td>{_moeda(imposto)}</td>"
+        f"<td style='color:{cor};font-weight:500'>{_moeda(liquido)}</td>"
+        f"<td style='color:{cor}'>{margem:.0f}%</td></tr>"
+    )
+    return linha, {"venda": venda, "com": comissao, "frete": frete, "arec": a_receber,
+                   "custo": custo, "imp": imposto, "liq": liquido}
+
+
+def _seg_ml(acc: dict, de: str, ate: str, cfg: dict, custos_prod: dict) -> dict:
     linhas = ""
     n = 0
-    custos_prod = produtos.custos()  # {item_id: custo real} carregado 1x
-    t = {"venda": 0.0, "com": 0.0, "frete": 0.0, "arec": 0.0,
-         "custo": 0.0, "imp": 0.0, "liq": 0.0}
-    for acc in mercadolivre.contas():
-        uid = str(acc["user_id"])
-        try:
-            pedidos = mercadolivre.pedidos_periodo(de, ate, user_id=uid, token=acc)
-        except (RuntimeError, httpx.HTTPStatusError):
-            pedidos = []
-        for o in pedidos:
-            n += 1
-            venda = float(o.get("total_amount") or 0)
-            if not venda:
-                venda = sum(float(it.get("unit_price") or 0) * float(it.get("quantity") or 0)
-                            for it in (o.get("order_items") or []))
-            comissao = sum(float(it.get("sale_fee") or 0) for it in (o.get("order_items") or []))
-            frete = cfg["frete"]
-            a_receber = venda - comissao - frete  # o que o ML deposita
-            # custo: usa o custo REAL do produto (aba Produtos) quando preenchido;
-            # senao, cai no % configurado para a parte daquele item.
-            custo = 0.0
-            for it in (o.get("order_items") or []):
-                qtd = float(it.get("quantity") or 0)
-                venda_it = float(it.get("unit_price") or 0) * qtd
-                item_id = str((it.get("item") or {}).get("id") or "")
-                real = custos_prod.get(item_id)
-                custo += (real * qtd) if real is not None else (venda_it * cfg["custo_pct"] / 100)
-            imposto = venda * cfg["imposto_pct"] / 100
-            liquido = a_receber - custo - imposto
-            margem = (liquido / venda * 100) if venda else 0
-            t["venda"] += venda; t["com"] += comissao; t["frete"] += frete
-            t["arec"] += a_receber; t["custo"] += custo; t["imp"] += imposto
-            t["liq"] += liquido
-            cor = "#0F6E56" if liquido >= 0 else "#A32D2D"
-            itens_ped = o.get("order_items") or []
-            titulo = (itens_ped[0].get("item") or {}).get("title", "-") if itens_ped else "-"
-            linhas += (
-                f"<tr><td>{_data_br(o.get('date_created'))}</td><td>{o.get('id','-')}</td>"
-                f"<td>{titulo[:32]}</td><td>{_moeda(venda)}</td><td>{_moeda(comissao)}</td>"
-                f"<td>{_moeda(frete)}</td><td style='font-weight:500'>{_moeda(a_receber)}</td>"
-                f"<td>{_moeda(custo)}</td><td>{_moeda(imposto)}</td>"
-                f"<td style='color:{cor};font-weight:500'>{_moeda(liquido)}</td>"
-                f"<td style='color:{cor}'>{margem:.0f}%</td></tr>"
-            )
+    t = _tot0()
+    try:
+        pedidos = mercadolivre.pedidos_periodo(de, ate, user_id=str(acc["user_id"]), token=acc)
+    except (RuntimeError, httpx.HTTPStatusError):
+        pedidos = []
+    for o in pedidos:
+        n += 1
+        linha, tp = _linha_e_totais_ml(o, cfg, custos_prod)
+        linhas += linha
+        for k in t:
+            t[k] += tp[k]
+    return {"nome": mercadolivre.nome_exibicao(acc), "linhas": linhas, "t": t, "n": n}
+
+
+def _seg_balcao(de: str, ate: str, cfg: dict) -> dict:
+    linhas = ""
+    n = 0
+    t = _tot0()
+    try:
+        peds = balcao.pedidos_periodo(de, ate)
+    except Exception:
+        peds = []
+    for pd in peds:
+        n += 1
+        venda = float(pd.get("total") or 0)
+        custo = venda * cfg["custo_pct"] / 100  # balcao nao tem custo por item ainda
+        imposto = venda * cfg["imposto_pct"] / 100
+        liquido = venda - custo - imposto  # sem comissao/frete no balcao
+        margem = (liquido / venda * 100) if venda else 0
+        cor = "#0F6E56" if liquido >= 0 else "#A32D2D"
+        t["venda"] += venda; t["arec"] += venda; t["custo"] += custo
+        t["imp"] += imposto; t["liq"] += liquido
+        data = _data_br(datetime.fromtimestamp(pd.get("criado_em") or 0).isoformat())
+        linhas += (
+            f"<tr><td>{data}</td><td>#{pd.get('id', '-')}</td>"
+            f"<td>{_esc((pd.get('cliente_nome') or '-')[:32])}</td><td>{_moeda(venda)}</td>"
+            f"<td>&mdash;</td><td>&mdash;</td><td style='font-weight:500'>{_moeda(venda)}</td>"
+            f"<td>{_moeda(custo)}</td><td>{_moeda(imposto)}</td>"
+            f"<td style='color:{cor};font-weight:500'>{_moeda(liquido)}</td>"
+            f"<td style='color:{cor}'>{margem:.0f}%</td></tr>"
+        )
+    return {"nome": "Balcao", "linhas": linhas, "t": t, "n": n}
+
+
+def _resultado_segmentos(de: str, ate: str, cfg: dict) -> list[dict]:
+    """Um segmento por loja do ML + um do Balcao."""
+    custos_prod = produtos.custos()
+    segs = [_seg_ml(acc, de, ate, cfg, custos_prod) for acc in mercadolivre.contas()]
+    segs.append(_seg_balcao(de, ate, cfg))
+    return segs
+
+
+def _calc_resultado(de: str, ate: str, cfg: dict):
+    """Totais combinados (todas as lojas + balcao). Usado pelo Fechamento."""
+    segs = _resultado_segmentos(de, ate, cfg)
+    linhas = "".join(s["linhas"] for s in segs)
+    t = _tot0()
+    n = 0
+    for s in segs:
+        n += s["n"]
+        for k in t:
+            t[k] += s["t"][k]
     return linhas, t, n
+
+
+def _card_kpi(rot: str, val: str, destaque: bool = False) -> str:
+    bg = "#EEEDFE" if destaque else "#f4f5f7"
+    cor = "#3C3489" if destaque else "#111"
+    peso = "700" if destaque else "600"
+    return (f"<div style='background:{bg};border-radius:10px;padding:12px 18px'>"
+            f"<div class='muted' style='font-size:12px'>{rot}</div>"
+            f"<div style='font-size:20px;font-weight:{peso};color:{cor}'>{val}</div></div>")
+
+
+def _cards_seg(t: dict) -> str:
+    margem = (t["liq"] / t["venda"] * 100) if t["venda"] else 0
+    return ("<div style='display:flex;gap:12px;flex-wrap:wrap;margin:8px 0 4px'>"
+            + _card_kpi("Faturamento", _moeda(t["venda"]))
+            + _card_kpi("A receber", _moeda(t["arec"]))
+            + _card_kpi("Custos + taxas", _moeda(t["com"] + t["frete"] + t["custo"] + t["imp"]))
+            + _card_kpi("Lucro liquido", _moeda(t["liq"]), destaque=True)
+            + _card_kpi("Margem", f"{margem:.0f}%")
+            + "</div>")
 
 
 @app.get("/resultado", response_class=HTMLResponse)
@@ -1540,22 +1616,14 @@ def resultado(request: Request, de: str = "", ate: str = ""):
     de = de or hoje.replace(day=1).isoformat()
     ate = ate or hoje.isoformat()
 
-    linhas, t, n_pedidos = _calc_resultado(de, ate, cfg)
-    t_venda, t_com, t_frete = t["venda"], t["com"], t["frete"]
-    t_arec, t_custo, t_imp, t_liq = t["arec"], t["custo"], t["imp"], t["liq"]
-    if not linhas:
-        linhas = "<tr><td colspan='11' class='muted'>Nenhum pedido no periodo.</td></tr>"
+    segs = _resultado_segmentos(de, ate, cfg)
+    tg = _tot0()
+    n_total = 0
+    for s in segs:
+        n_total += s["n"]
+        for k in tg:
+            tg[k] += s["t"][k]
 
-    margem_media = (t_liq / t_venda * 100) if t_venda else 0
-    cards = (
-        "<div style='display:flex;gap:12px;flex-wrap:wrap;margin:12px 0 22px'>"
-        f"<div style='background:#f4f5f7;border-radius:10px;padding:12px 18px'><div class='muted' style='font-size:12px'>Faturamento</div><div style='font-size:20px;font-weight:600'>{_moeda(t_venda)}</div></div>"
-        f"<div style='background:#f4f5f7;border-radius:10px;padding:12px 18px'><div class='muted' style='font-size:12px'>A receber (ML)</div><div style='font-size:20px;font-weight:600'>{_moeda(t_arec)}</div></div>"
-        f"<div style='background:#f4f5f7;border-radius:10px;padding:12px 18px'><div class='muted' style='font-size:12px'>Custos + taxas</div><div style='font-size:20px;font-weight:600'>{_moeda(t_com + t_frete + t_custo + t_imp)}</div></div>"
-        f"<div style='background:#EEEDFE;border-radius:10px;padding:12px 18px'><div class='muted' style='font-size:12px'>Lucro liquido</div><div style='font-size:20px;font-weight:700;color:#3C3489'>{_moeda(t_liq)}</div></div>"
-        f"<div style='background:#f4f5f7;border-radius:10px;padding:12px 18px'><div class='muted' style='font-size:12px'>Margem media</div><div style='font-size:20px;font-weight:600'>{margem_media:.0f}%</div></div>"
-        "</div>"
-    )
     aviso = ("" if cfg["definido"] else
              "<div class='card' style='background:#FFF7E6;border-color:#FAD89B'>"
              "Voce ainda nao configurou os percentuais &mdash; usando custo 20% e imposto 6% de exemplo. "
@@ -1571,20 +1639,38 @@ def resultado(request: Request, de: str = "", ate: str = ""):
         "style='padding:8px;border:1px solid #d7dade;border-radius:8px'/></div>"
         "<button class='btn'>Filtrar</button></form>"
     )
+
+    thead = ("<tr><th>Data</th><th>Pedido</th><th>Produto/Cliente</th><th>Venda</th>"
+             "<th>Comissao</th><th>Frete</th><th>A receber</th><th>Custo</th><th>Imposto</th>"
+             "<th>Liquido</th><th>Margem</th></tr>")
+    secoes = ""
+    for s in segs:
+        linhas = s["linhas"] or "<tr><td colspan='11' class='muted'>Nenhum pedido no periodo.</td></tr>"
+        secoes += (
+            f"<h2 style='margin:24px 0 2px;font-size:19px'>{_esc(s['nome'])} "
+            f"<span class='muted' style='font-weight:400;font-size:14px'>&middot; "
+            f"{s['n']} pedido(s)</span></h2>"
+            + _cards_seg(s["t"])
+            + "<details style='margin-top:2px'><summary class='muted' style='cursor:pointer;"
+            "font-size:13px'>ver detalhes dos pedidos</summary>"
+            "<div style='overflow-x:auto'><table style='min-width:760px'>"
+            + thead + linhas + "</table></div></details>"
+        )
+
     corpo = (
         "<h1>Resultado</h1>"
         f"<p class='muted'>Periodo {_data_br(de)} a {_data_br(ate)} &middot; "
-        f"<b>{n_pedidos}</b> pedidos &middot; Custo {cfg['custo_pct']:g}% &middot; "
+        f"<b>{n_total}</b> pedidos &middot; Custo {cfg['custo_pct']:g}% &middot; "
         f"Imposto {cfg['imposto_pct']:g}% &middot; Frete {_moeda(cfg['frete'])}/pedido &middot; "
         "<a href='/resultado/config'>ajustar</a></p>"
-        f"{form_periodo}{aviso}{cards}"
-        "<div style='overflow-x:auto'><table style='min-width:760px'>"
-        "<tr><th>Data</th><th>Pedido</th><th>Produto</th><th>Venda</th><th>Comissao</th>"
-        "<th>Frete</th><th>A receber</th><th>Custo</th><th>Imposto</th><th>Liquido</th>"
-        f"<th>Margem</th></tr>{linhas}</table></div>"
-        "<p class='muted' style='margin-top:12px;font-size:12px'>Venda e <b>comissao</b> = reais do "
-        "Mercado Livre. <b>A receber</b> = venda &minus; comissao &minus; frete (o que cai na conta). "
-        "Custo e imposto = % configurados; frete = medio configurado.</p>"
+        f"{form_periodo}{aviso}"
+        "<h2 style='margin:6px 0 2px;font-size:19px'>Total geral</h2>"
+        + _cards_seg(tg)
+        + secoes
+        + "<p class='muted' style='margin-top:16px;font-size:12px'>Venda e <b>comissao</b> = reais do "
+        "Mercado Livre. <b>A receber</b> = venda &minus; comissao &minus; frete. No <b>Balcao</b> nao "
+        "ha comissao/frete e o custo usa o % configurado (ainda sem custo por item). "
+        "Imposto = % configurado.</p>"
     )
     return _pagina(corpo, ativo="resultado", papel=papel, nome=nome)
 

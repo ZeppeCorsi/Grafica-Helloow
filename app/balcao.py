@@ -85,6 +85,14 @@ if DATABASE_URL:
             return [dict(zip(["id", "cliente_nome", "total", "criado_em"], r))
                     for r in cur.fetchall()]
 
+    def _pedidos_periodo(de: str, ate: str) -> list[dict]:
+        with _conn() as c, c.cursor() as cur:
+            cur.execute("SELECT id, cliente_nome, total, criado_em FROM pedido_balcao "
+                        "WHERE to_timestamp(criado_em)::date BETWEEN %s AND %s "
+                        "ORDER BY criado_em", (de, ate))
+            return [dict(zip(["id", "cliente_nome", "total", "criado_em"], r))
+                    for r in cur.fetchall()]
+
     def _listar(tab: str, campos: tuple) -> list[dict]:
         cols = ",".join(("id",) + campos)
         with _conn() as c, c.cursor() as cur:
@@ -180,6 +188,15 @@ else:
                       reverse=True)
         return regs[:limite]
 
+    def _pedidos_periodo(de: str, ate: str) -> list[dict]:
+        out = []
+        for x in _load(_ARQ_PED)["itens"]:
+            d = time.strftime("%Y-%m-%d", time.localtime(x.get("criado_em") or 0))
+            if de <= d <= ate:
+                out.append(x)
+        out.sort(key=lambda r: r.get("criado_em") or 0)
+        return out
+
 
 # --------------------------------------------------------------------------- #
 # API do modulo
@@ -226,3 +243,7 @@ def obter_pedido(pid: int) -> dict | None:
 
 def listar_pedidos(limite: int = 50) -> list[dict]:
     return _listar_pedidos(limite)
+
+
+def pedidos_periodo(de: str, ate: str) -> list[dict]:
+    return _pedidos_periodo(de, ate)
