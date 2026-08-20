@@ -47,26 +47,32 @@ if DATABASE_URL:
              "preco DOUBLE PRECISION)")
         _ddl("CREATE TABLE IF NOT EXISTS pedido_balcao (id SERIAL PRIMARY KEY, "
              "cliente_id INTEGER, cliente_nome TEXT, observacao TEXT, "
-             "total DOUBLE PRECISION, itens TEXT, atendente TEXT, "
+             "total DOUBLE PRECISION, itens TEXT, atendente TEXT, vendedor TEXT, "
              "criado_em DOUBLE PRECISION)")
+        _ddl("ALTER TABLE pedido_balcao ADD COLUMN IF NOT EXISTS vendedor TEXT")
 
     _init()
 
     _PED_COLS = ["id", "cliente_id", "cliente_nome", "observacao", "total",
-                 "itens", "atendente", "criado_em"]
+                 "itens", "atendente", "vendedor", "criado_em"]
 
     def _salvar_pedido(dados: dict) -> int:
         with _conn() as c, c.cursor() as cur:
             cur.execute("INSERT INTO pedido_balcao (cliente_id, cliente_nome, observacao, "
-                        "total, itens, atendente, criado_em) VALUES (%s,%s,%s,%s,%s,%s,%s) "
-                        "RETURNING id",
+                        "total, itens, atendente, vendedor, criado_em) "
+                        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
                         (dados.get("cliente_id"), dados.get("cliente_nome"),
                          dados.get("observacao"), dados.get("total"),
                          json.dumps(dados.get("itens") or []), dados.get("atendente"),
-                         time.time()))
+                         dados.get("vendedor"), time.time()))
             pid = cur.fetchone()[0]
             c.commit()
         return pid
+
+    def _excluir_pedido(pid: int) -> None:
+        with _conn() as c, c.cursor() as cur:
+            cur.execute("DELETE FROM pedido_balcao WHERE id=%s", (pid,))
+            c.commit()
 
     def _obter_pedido(pid: int) -> dict | None:
         with _conn() as c, c.cursor() as cur:
@@ -80,17 +86,17 @@ if DATABASE_URL:
 
     def _listar_pedidos(limite: int) -> list[dict]:
         with _conn() as c, c.cursor() as cur:
-            cur.execute("SELECT id, cliente_nome, total, criado_em FROM pedido_balcao "
+            cur.execute("SELECT id, cliente_nome, total, vendedor, criado_em FROM pedido_balcao "
                         "ORDER BY criado_em DESC LIMIT %s", (limite,))
-            return [dict(zip(["id", "cliente_nome", "total", "criado_em"], r))
+            return [dict(zip(["id", "cliente_nome", "total", "vendedor", "criado_em"], r))
                     for r in cur.fetchall()]
 
     def _pedidos_periodo(de: str, ate: str) -> list[dict]:
         with _conn() as c, c.cursor() as cur:
-            cur.execute("SELECT id, cliente_nome, total, criado_em FROM pedido_balcao "
+            cur.execute("SELECT id, cliente_nome, total, vendedor, criado_em FROM pedido_balcao "
                         "WHERE to_timestamp(criado_em)::date BETWEEN %s AND %s "
                         "ORDER BY criado_em", (de, ate))
-            return [dict(zip(["id", "cliente_nome", "total", "criado_em"], r))
+            return [dict(zip(["id", "cliente_nome", "total", "vendedor", "criado_em"], r))
                     for r in cur.fetchall()]
 
     def _listar(tab: str, campos: tuple) -> list[dict]:
@@ -175,13 +181,19 @@ else:
             "id": d["seq"], "cliente_id": dados.get("cliente_id"),
             "cliente_nome": dados.get("cliente_nome"), "observacao": dados.get("observacao"),
             "total": dados.get("total"), "itens": dados.get("itens") or [],
-            "atendente": dados.get("atendente"), "criado_em": time.time(),
+            "atendente": dados.get("atendente"), "vendedor": dados.get("vendedor"),
+            "criado_em": time.time(),
         })
         _save(_ARQ_PED, d)
         return d["seq"]
 
     def _obter_pedido(pid: int) -> dict | None:
         return next((x for x in _load(_ARQ_PED)["itens"] if x["id"] == int(pid)), None)
+
+    def _excluir_pedido(pid: int) -> None:
+        d = _load(_ARQ_PED)
+        d["itens"] = [x for x in d["itens"] if x["id"] != int(pid)]
+        _save(_ARQ_PED, d)
 
     def _listar_pedidos(limite: int) -> list[dict]:
         regs = sorted(_load(_ARQ_PED)["itens"], key=lambda x: x.get("criado_em") or 0,
@@ -247,3 +259,7 @@ def listar_pedidos(limite: int = 50) -> list[dict]:
 
 def pedidos_periodo(de: str, ate: str) -> list[dict]:
     return _pedidos_periodo(de, ate)
+
+
+def excluir_pedido(pid: int) -> None:
+    _excluir_pedido(pid)

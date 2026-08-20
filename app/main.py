@@ -1539,6 +1539,7 @@ def _seg_balcao(de: str, ate: str, cfg: dict) -> dict:
     linhas = ""
     n = 0
     t = _tot0()
+    por_vend: dict = {}  # vendedor -> {"n", "venda", "liq"}
     try:
         peds = balcao.pedidos_periodo(de, ate)
     except Exception:
@@ -1553,16 +1554,22 @@ def _seg_balcao(de: str, ate: str, cfg: dict) -> dict:
         cor = "#0F6E56" if liquido >= 0 else "#A32D2D"
         t["venda"] += venda; t["arec"] += venda; t["custo"] += custo
         t["imp"] += imposto; t["liq"] += liquido
+        vend = pd.get("vendedor") or "(sem vendedor)"
+        pv = por_vend.setdefault(vend, {"n": 0, "venda": 0.0, "liq": 0.0})
+        pv["n"] += 1; pv["venda"] += venda; pv["liq"] += liquido
         data = _data_br(datetime.fromtimestamp(pd.get("criado_em") or 0).isoformat())
+        cli_vend = (f"{_esc((pd.get('cliente_nome') or '-')[:28])}"
+                    f"<div class='muted' style='font-size:11px'>vend.: "
+                    f"{_esc(pd.get('vendedor') or '-')}</div>")
         linhas += (
             f"<tr><td>{data}</td><td>#{pd.get('id', '-')}</td>"
-            f"<td>{_esc((pd.get('cliente_nome') or '-')[:32])}</td><td>{_moeda(venda)}</td>"
+            f"<td>{cli_vend}</td><td>{_moeda(venda)}</td>"
             f"<td>&mdash;</td><td>&mdash;</td><td style='font-weight:500'>{_moeda(venda)}</td>"
             f"<td>{_moeda(custo)}</td><td>{_moeda(imposto)}</td>"
             f"<td style='color:{cor};font-weight:500'>{_moeda(liquido)}</td>"
             f"<td style='color:{cor}'>{margem:.0f}%</td></tr>"
         )
-    return {"nome": "Balcao", "linhas": linhas, "t": t, "n": n}
+    return {"nome": "Balcao", "linhas": linhas, "t": t, "n": n, "por_vendedor": por_vend}
 
 
 def _resultado_segmentos(de: str, ate: str, cfg: dict) -> list[dict]:
@@ -1646,11 +1653,27 @@ def resultado(request: Request, de: str = "", ate: str = ""):
     secoes = ""
     for s in segs:
         linhas = s["linhas"] or "<tr><td colspan='11' class='muted'>Nenhum pedido no periodo.</td></tr>"
+        # tabela de comissao por vendedor (so no balcao)
+        vend_html = ""
+        pv = s.get("por_vendedor") or {}
+        if pv:
+            rows_v = "".join(
+                f"<tr><td>{_esc(v)}</td><td style='text-align:center'>{d['n']}</td>"
+                f"<td style='text-align:right'>{_moeda(d['venda'])}</td>"
+                f"<td style='text-align:right'>{_moeda(d['liq'])}</td></tr>"
+                for v, d in sorted(pv.items(), key=lambda x: -x[1]["venda"]))
+            vend_html = (
+                "<div style='margin:8px 0 4px'><b style='font-size:14px'>Vendas por vendedor</b>"
+                "<div style='overflow-x:auto'><table style='max-width:520px'>"
+                "<tr><th>Vendedor</th><th style='text-align:center'>Qtd</th>"
+                "<th style='text-align:right'>Vendido</th><th style='text-align:right'>Liquido</th></tr>"
+                + rows_v + "</table></div></div>")
         secoes += (
             f"<h2 style='margin:24px 0 2px;font-size:19px'>{_esc(s['nome'])} "
             f"<span class='muted' style='font-weight:400;font-size:14px'>&middot; "
             f"{s['n']} pedido(s)</span></h2>"
             + _cards_seg(s["t"])
+            + vend_html
             + "<details style='margin-top:2px'><summary class='muted' style='cursor:pointer;"
             "font-size:13px'>ver detalhes dos pedidos</summary>"
             "<div style='overflow-x:auto'><table style='min-width:760px'>"
@@ -3196,6 +3219,12 @@ def balcao_page(request: Request, msg: str = ""):
     nome, papel = _atual(request)
     clientes = balcao.listar_clientes()
     prods = balcao.listar_produtos()
+    equipe = [u["nome"] for u in usuarios.listar_usuarios()]
+    if nome and nome not in equipe:
+        equipe.insert(0, nome)
+    opt_vend = "<option value=''>Selecione o vendedor</option>" + "".join(
+        f"<option value='{_esc(v)}' {'selected' if v == nome else ''}>{_esc(v)}</option>"
+        for v in equipe)
 
     aviso = ""
     if msg:
@@ -3227,9 +3256,13 @@ def balcao_page(request: Request, msg: str = ""):
     card_emitir = (
         "<div class='card'><h3 style='margin-top:0'>Venda no balcao</h3>"
         "<form method='post' action='/balcao/finalizar'>"
-        "<div style='margin-bottom:10px'><select name='cliente_id' required "
-        "style='padding:8px;border:1px solid #d7dade;border-radius:8px;min-width:280px'>"
-        + opt_cli + "</select></div>"
+        "<div style='display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px'>"
+        "<select name='cliente_id' required "
+        "style='padding:8px;border:1px solid #d7dade;border-radius:8px;min-width:260px'>"
+        + opt_cli + "</select>"
+        "<select name='vendedor' required "
+        "style='padding:8px;border:1px solid #d7dade;border-radius:8px;min-width:180px'>"
+        + opt_vend + "</select></div>"
         "<div id='itens'>" + linha_item + "</div>"
         "<button type='button' class='btn ghost' onclick='addItem()' style='margin:4px 0 10px'>"
         "+ item</button>"
@@ -3244,17 +3277,24 @@ def balcao_page(request: Request, msg: str = ""):
         "var n=c.firstElementChild.cloneNode(true);c.appendChild(n);}</script>"
     )
 
-    # ---- Pedidos finalizados no balcao (reimprimir) ----
+    # ---- Pedidos finalizados no balcao (reimprimir / excluir) ----
     linhas_ped = ""
-    for pd in balcao.listar_pedidos(30):
+    for pd in balcao.listar_pedidos(50):
+        excluir = ""
+        if papel == "admin":
+            excluir = (f"<form method='post' action='/balcao/pedido/excluir' style='display:inline' "
+                       f"onsubmit=\"return confirm('Excluir esta venda de balcao? Nao tem volta.')\">"
+                       f"<input type='hidden' name='id' value='{pd['id']}'/>"
+                       "<button class='btn ghost' style='padding:2px 8px;color:#A32D2D'>excluir</button></form>")
         linhas_ped += (f"<tr><td>#{pd['id']}</td><td>{_esc(pd.get('cliente_nome') or '-')}</td>"
+                       f"<td>{_esc(pd.get('vendedor') or '-')}</td>"
                        f"<td>{_moeda(float(pd.get('total') or 0))}</td>"
                        f"<td><a href='/balcao/imprimir?id={pd['id']}' target='_blank'>"
-                       "<i class='ti ti-printer'></i> imprimir</a></td></tr>")
+                       f"<i class='ti ti-printer'></i> imprimir</a> {excluir}</td></tr>")
     if not linhas_ped:
-        linhas_ped = "<tr><td colspan='4' class='muted'>Nenhum pedido finalizado ainda.</td></tr>"
+        linhas_ped = "<tr><td colspan='5' class='muted'>Nenhum pedido finalizado ainda.</td></tr>"
     card_pedidos = ("<div class='card'><h3 style='margin-top:0'>Pedidos do balcao</h3>"
-                    "<table><tr><th>#</th><th>Cliente</th><th>Total</th><th></th></tr>"
+                    "<table><tr><th>#</th><th>Cliente</th><th>Vendedor</th><th>Total</th><th></th></tr>"
                     + linhas_ped + "</table></div>")
 
     # ---- Notas emitidas no balcao ----
@@ -3327,6 +3367,7 @@ async def balcao_finalizar(request: Request):
     form = await request.form()
     cli = balcao.obter_cliente(int(form.get("cliente_id") or 0)) or {}
     obs = str(form.get("observacao") or "").strip()
+    vendedor = str(form.get("vendedor") or "").strip() or (nome or "?")
     itens = []
     total = 0.0
     for pid, q in zip(form.getlist("prod"), form.getlist("qtd")):
@@ -3346,9 +3387,21 @@ async def balcao_finalizar(request: Request):
                                 status_code=303)
     pid = balcao.salvar_pedido({"cliente_id": cli.get("id"), "cliente_nome": cli.get("nome"),
                                 "observacao": obs, "total": round(total, 2), "itens": itens,
-                                "atendente": nome or "?"})
+                                "atendente": nome or "?", "vendedor": vendedor})
     usuarios.registrar(nome or "?", "balcao_pedido", str(pid))
     return RedirectResponse(f"/balcao/imprimir?id={pid}", status_code=303)
+
+
+@app.post("/balcao/pedido/excluir")
+async def balcao_pedido_excluir(request: Request, id: int = Form(...)):
+    """Exclui uma venda de balcao. Apenas admin."""
+    nome, papel = _atual(request)
+    if papel != "admin":
+        return RedirectResponse("/balcao?msg=" + quote("Somente o administrador pode excluir."),
+                                status_code=303)
+    balcao.excluir_pedido(id)
+    usuarios.registrar(nome or "?", "balcao_excluir", str(id))
+    return RedirectResponse("/balcao?msg=" + quote("Venda de balcao excluida."), status_code=303)
 
 
 @app.get("/balcao/imprimir", response_class=HTMLResponse)
@@ -3436,7 +3489,7 @@ td {{ padding:8px; border-bottom:1px solid #eee }}
   <div class='box' style='max-width:280px'>
     <div class='lbl'>Numero do pedido</div><b>#{pedido['id']}</b>
     <div class='lbl' style='margin-top:6px'>Data</div>{data}
-    <div class='lbl' style='margin-top:6px'>Atendente</div>{_esc(pedido.get('atendente') or '-')}
+    <div class='lbl' style='margin-top:6px'>Vendedor</div>{_esc(pedido.get('vendedor') or pedido.get('atendente') or '-')}
   </div>
 </div>
 <table>
